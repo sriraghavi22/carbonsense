@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { Activity, Zap, AlertCircle, TrendingUp, Info } from 'lucide-react';
+import { Activity, Zap, AlertCircle, TrendingUp, Info, Cloud, Wind, Droplets, Sun, CloudRain } from 'lucide-react';
 
 export default function CarbonSenseApp() {
   const [domain, setDomain] = useState('transport');
@@ -227,6 +227,85 @@ export default function CarbonSenseApp() {
 
         {/* Results Panel */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Weather Context Card */}
+          {predictions?.weather_context && predictions.weather_context.success && (
+            <div className="bg-gradient-to-r from-blue-900 to-cyan-900 rounded-2xl p-6 shadow-2xl border-2 border-blue-500">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-blue-500 rounded-lg flex items-center justify-center">
+                    <Cloud className="w-7 h-7 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-bold text-white">
+                      Weather Impact: {predictions.weather_context.location}
+                    </h3>
+                    <div className="text-sm text-gray-300">
+                      {predictions.weather_context.description}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-5xl">
+                  {predictions.weather_context.condition === 'Clear' ? '☀️' :
+                   predictions.weather_context.condition === 'Clouds' ? '☁️' :
+                   predictions.weather_context.condition === 'Rain' ? '🌧️' :
+                   predictions.weather_context.condition === 'Snow' ? '❄️' : '🌤️'}
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-4 bg-gray-800 bg-opacity-40 rounded-xl p-4">
+                <div>
+                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                    <Sun className="w-4 h-4" />
+                    Temperature
+                  </div>
+                  <div className="text-3xl font-bold text-white">
+                    {predictions.weather_context.temperature}°C
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    Feels like {predictions.weather_context.feels_like}°C
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                    <Wind className="w-4 h-4" />
+                    Wind Speed
+                  </div>
+                  <div className="text-3xl font-bold text-cyan-400">
+                    {predictions.weather_context.wind_speed}
+                  </div>
+                  <div className="text-xs text-gray-400">m/s</div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                    <Droplets className="w-4 h-4" />
+                    Humidity
+                  </div>
+                  <div className="text-3xl font-bold text-blue-400">
+                    {predictions.weather_context.humidity}%
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    {predictions.weather_context.clouds}% clouds
+                  </div>
+                </div>
+              </div>
+              
+              <div className="mt-4 p-3 bg-blue-500 bg-opacity-20 rounded-lg border border-blue-400">
+                <div className="text-sm font-semibold text-blue-200 mb-2">
+                  Carbon Impact: {predictions.weather_context.impact.score > 0 ? '📈' : '📉'} 
+                  {Math.abs(predictions.weather_context.impact.score)}% {predictions.weather_context.impact.score > 0 ? 'increase' : 'decrease'}
+                </div>
+                <div className="text-xs text-gray-300">{predictions.weather_context.impact.message}</div>
+                {predictions.weather_context.impact.factors.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {predictions.weather_context.impact.factors.map((factor, i) => (
+                      <li key={i} className="text-xs text-gray-300">• {factor}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+          
           {/* Live Grid Card - PROMINENT */}
           {predictions?.grid_context && (
             <div className="bg-gradient-to-r from-gray-800 to-gray-900 rounded-2xl p-6 shadow-2xl border-2 border-green-500">

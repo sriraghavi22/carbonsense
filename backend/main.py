@@ -70,14 +70,17 @@ async def predict(request: PredictRequest):
     if domain == "energy" and request.kwh is None:
         raise HTTPException(400, "kwh required")
     
-    # Get real-time grid intensity for energy domain
+    # Get real-time grid intensity and weather for energy domain
     grid_context = None
+    weather_context = None
     if domain == "energy":
         grid_context = grid_service.get_intensity(
             location=request.location,
             hour=request.hour,
             is_weekend=bool(request.is_weekend)
         )
+        # Add weather data
+        weather_context = grid_service.get_weather(request.location)
     
     # Prepare features with proper column names
     if domain == "transport":
@@ -109,7 +112,6 @@ async def predict(request: PredictRequest):
             results[model_name] = {"error": str(e)}
     
     # Add context-aware adjustment for energy
-    print(f"DEBUG results: {results}")
     if domain == "energy" and grid_context and "bayesian" in results and "mean" in results["bayesian"]:
         # Calculate adjusted emissions using real-time grid intensity
         static_intensity = 400  # Default used in training (gCO2/kWh)
@@ -118,11 +120,25 @@ async def predict(request: PredictRequest):
         # Adjust predictions based on live vs static grid
         adjustment_factor = live_intensity / static_intensity
         
+        # Apply weather impact if available
+        weather_adjustment = 1.0
+        if weather_context and weather_context.get("success"):
+            # Apply weather impact score as percentage adjustment
+            impact_score = weather_context["impact"]["score"]
+            weather_adjustment = 1.0 + (impact_score / 100.0)
+        
+        final_adjustment = adjustment_factor * weather_adjustment
+        
         results["context_aware"] = {
-            "mean": results["bayesian"]["mean"] * adjustment_factor,
-            "ci_lower": results["bayesian"]["ci_lower"] * adjustment_factor,
-            "ci_upper": results["bayesian"]["ci_upper"] * adjustment_factor,
-            "description": "Adjusted using real-time grid intensity"
+            "mean": results["bayesian"]["mean"] * final_adjustment,
+            "ci_lower": results["bayesian"]["ci_lower"] * final_adjustment,
+            "ci_upper": results["bayesian"]["ci_upper"] * final_adjustment,
+            "description": "Adjusted using real-time grid intensity and weather conditions",
+            "adjustments": {
+                "grid_factor": round(adjustment_factor, 3),
+                "weather_factor": round(weather_adjustment, 3),
+                "total_factor": round(final_adjustment, 3)
+            }
         }
     
     # Build response
@@ -143,7 +159,6 @@ async def predict(request: PredictRequest):
             "method": grid_context["method"],
             "timestamp": grid_context["timestamp"]
         }
-        print(f"DEBUG response grid_context: {response.get('grid_context')}")
         
         # Add comparison message
         if domain == "energy":
@@ -153,9 +168,12 @@ async def predict(request: PredictRequest):
                 "difference_percent": comparison["difference_percent"],
                 "message": comparison["message"]
             }
-    print(f"DEBUG FULL RESPONSE: {response}")
+    
+    # Add weather context
+    if weather_context and weather_context.get("success"):
+        response["weather_context"] = weather_context
+    
     return response
-
 
 @app.get("/grid-intensity/{location}")
 async def get_grid_intensity(
@@ -180,7 +198,6 @@ async def get_grid_intensity(
         }
     except Exception as e:
         raise HTTPException(500, str(e))
-
 
 @app.get("/health")
 async def health():

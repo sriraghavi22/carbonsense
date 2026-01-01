@@ -1,5 +1,5 @@
 """
-Production Grid Intensity Client for CarbonSense Backend
+Production Grid Intensity Client for CarbonSense Backend with Weather Integration
 """
 
 import os
@@ -12,7 +12,7 @@ load_dotenv()
 
 
 class GridIntensityService:
-    """Multi-strategy grid intensity service"""
+    """Multi-strategy grid intensity service with weather integration"""
     
     def __init__(self):
         # API credentials
@@ -23,6 +23,7 @@ class GridIntensityService:
             self.wt_username, self.wt_password = None, None
         
         self.em_key = os.getenv("ELECTRICITYMAPS_API_KEY")
+        self.openweather_key = os.getenv("OPENWEATHER_API_KEY")
         self.wt_token = None
         
         # Login to WattTime if credentials exist
@@ -41,6 +42,113 @@ class GridIntensityService:
                 self.wt_token = resp.json()["token"]
         except:
             pass
+    
+    def get_weather(self, location: str) -> Dict:
+        """Get current weather for a location"""
+        if not self.openweather_key:
+            return {"success": False, "error": "No OpenWeather API key"}
+        
+        # Location to coordinates mapping
+        location_coords = {
+            "uk": {"lat": 51.5074, "lon": -0.1278, "name": "London, UK"},
+            "united kingdom": {"lat": 51.5074, "lon": -0.1278, "name": "London, UK"},
+            "california": {"lat": 37.7749, "lon": -122.4194, "name": "San Francisco, CA"},
+            "india": {"lat": 17.3850, "lon": 78.4867, "name": "Hyderabad, India"},
+            "hyderabad": {"lat": 17.3850, "lon": 78.4867, "name": "Hyderabad, India"}
+        }
+        
+        coords = location_coords.get(location.lower())
+        if not coords:
+            coords = {"lat": 51.5074, "lon": -0.1278, "name": "London, UK"}  # Default
+        
+        try:
+            resp = requests.get(
+                "https://api.openweathermap.org/data/2.5/weather",
+                params={
+                    "lat": coords["lat"],
+                    "lon": coords["lon"],
+                    "appid": self.openweather_key,
+                    "units": "metric"
+                },
+                timeout=5
+            )
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                
+                # Calculate weather impact on emissions
+                temp = data["main"]["temp"]
+                weather_condition = data["weather"][0]["main"]
+                wind_speed = data["wind"]["speed"]
+                clouds = data["clouds"]["all"]
+                
+                # Weather impact scoring
+                impact_score = 0
+                impact_factors = []
+                
+                # Temperature impact (heating/cooling demand)
+                if temp < 10:
+                    impact_score += 15
+                    impact_factors.append(f"Cold ({temp}°C) increases heating demand")
+                elif temp > 28:
+                    impact_score += 20
+                    impact_factors.append(f"Hot ({temp}°C) increases cooling demand")
+                elif 18 <= temp <= 22:
+                    impact_score -= 10
+                    impact_factors.append(f"Mild ({temp}°C) reduces HVAC demand")
+                
+                # Renewable energy impact
+                if weather_condition in ["Clear", "Clouds"] and clouds < 50:
+                    impact_score -= 5
+                    impact_factors.append("Clear skies boost solar generation")
+                
+                if wind_speed > 5:
+                    impact_score -= 8
+                    impact_factors.append(f"High winds ({wind_speed} m/s) boost wind power")
+                elif wind_speed < 2:
+                    impact_score += 5
+                    impact_factors.append("Low wind reduces wind power generation")
+                
+                if weather_condition == "Rain":
+                    impact_score += 5
+                    impact_factors.append("Rain reduces solar generation")
+                
+                return {
+                    "success": True,
+                    "location": coords["name"],
+                    "temperature": round(temp, 1),
+                    "feels_like": round(data["main"]["feels_like"], 1),
+                    "condition": weather_condition,
+                    "description": data["weather"][0]["description"],
+                    "humidity": data["main"]["humidity"],
+                    "wind_speed": round(wind_speed, 1),
+                    "clouds": clouds,
+                    "icon": data["weather"][0]["icon"],
+                    "timestamp": datetime.now().isoformat(),
+                    "impact": {
+                        "score": impact_score,
+                        "factors": impact_factors,
+                        "message": self._get_weather_impact_message(impact_score)
+                    }
+                }
+        except Exception as e:
+            print(f"Weather API error: {e}")
+            return {"success": False, "error": str(e)}
+        
+        return {"success": False}
+    
+    def _get_weather_impact_message(self, score: int) -> str:
+        """Get human-readable weather impact message"""
+        if score <= -10:
+            return "Excellent weather for low emissions! Renewables are performing well."
+        elif score <= -5:
+            return "Good weather conditions reducing grid carbon intensity."
+        elif -5 < score < 5:
+            return "Weather has minimal impact on emissions today."
+        elif score <= 15:
+            return "Weather is moderately increasing energy demand and emissions."
+        else:
+            return "Extreme weather is significantly increasing energy demand."
     
     def get_intensity(
         self, 
@@ -248,4 +356,4 @@ def get_grid_service() -> GridIntensityService:
     global _service
     if _service is None:
         _service = GridIntensityService()
-    return _service
+    return _service 
