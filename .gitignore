@@ -1,0 +1,91 @@
+############################
+# OS / Editor
+############################
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.log
+
+############################
+# Environment files
+############################
+.env
+.env.*
+!.env.example
+
+############################
+# Python (Backend - Uvicorn)
+############################
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Mypy / Ruff
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# SQLite / local DBs
+*.sqlite3
+*.db
+
+############################
+# Backend-specific
+############################
+backend/.env
+backend/logs/
+backend/staticfiles/
+backend/media/
+
+############################
+# Node / React (Frontend - Vite)
+############################
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Vite build output
+dist/
+dist-ssr/
+
+# Vite cache
+.vite/
+
+############################
+# Frontend-specific
+############################
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+
+############################
+# Testing / Misc
+############################
+coverage/
+.cache/
+
+# Project data (CarbonSense)
+data/
