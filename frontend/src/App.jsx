@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { Activity, Zap, AlertCircle, TrendingUp, Info, Cloud, Wind, Droplets, Sun, CloudRain } from 'lucide-react';
+import { Activity, Zap, AlertCircle, TrendingUp, Info, Cloud, Wind, Droplets, Sun, CloudRain, Lightbulb, BarChart3 } from 'lucide-react';
 
 export default function CarbonSenseApp() {
   const [domain, setDomain] = useState('transport');
@@ -422,6 +422,87 @@ export default function CarbonSenseApp() {
                   Standard Deviation: {predictions.predictions.bayesian.std.toFixed(2)} kg
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* SHAP Explainability Section */}
+          {predictions?.explainability && Object.keys(predictions.explainability).length > 0 && (
+            <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700 shadow-2xl">
+              <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                <Lightbulb className="w-5 h-5 text-yellow-400" />
+                AI Explainability - Why This Prediction?
+              </h3>
+              
+              {Object.entries(predictions.explainability).map(([modelName, explainData]) => {
+                if (explainData.error) return null;
+                
+                return (
+                  <div key={modelName} className="mb-6 last:mb-0">
+                    <div className="flex items-center gap-2 mb-3">
+                      <BarChart3 className="w-4 h-4" style={{ color: modelColors[modelName] }} />
+                      <h4 className="text-lg font-semibold uppercase" style={{ color: modelColors[modelName] }}>
+                        {modelName} Model Explanation
+                      </h4>
+                    </div>
+                    
+                    {/* Human-readable explanation */}
+                    <div className="bg-gray-700 bg-opacity-50 rounded-lg p-4 mb-3">
+                      <p className="text-sm text-gray-300 leading-relaxed">
+                        💡 {explainData.explanation}
+                      </p>
+                    </div>
+                    
+                    {/* Base value info */}
+                    <div className="text-xs text-gray-400 mb-3">
+                      Base prediction (average): {explainData.base_value?.toFixed(3)} kg CO₂ 
+                      → Final: {explainData.prediction?.toFixed(3)} kg CO₂
+                    </div>
+                    
+                    {/* Feature importance bars */}
+                    <div className="space-y-2">
+                      {explainData.feature_importance?.map((feature, idx) => {
+                        const isPositive = feature.shap_value > 0;
+                        const maxAbsValue = Math.max(...explainData.feature_importance.map(f => Math.abs(f.shap_value)));
+                        const barWidth = (Math.abs(feature.shap_value) / maxAbsValue) * 100;
+                        
+                        return (
+                          <div key={idx} className="bg-gray-700 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-sm font-medium text-gray-300">
+                                {feature.feature}
+                                <span className="text-xs text-gray-500 ml-2">
+                                  (value: {typeof feature.value === 'number' ? feature.value.toFixed(2) : feature.value})
+                                </span>
+                              </span>
+                              <span className={`text-sm font-bold ${isPositive ? 'text-red-400' : 'text-green-400'}`}>
+                                {isPositive ? '+' : ''}{feature.shap_value.toFixed(3)} kg
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-600 rounded-full h-2">
+                              <div
+                                className={`h-2 rounded-full ${isPositive ? 'bg-red-500' : 'bg-green-500'}`}
+                                style={{ width: `${barWidth}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    
+                    {/* Legend */}
+                    <div className="mt-3 flex items-center gap-4 text-xs text-gray-400">
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 bg-red-500 rounded"></div>
+                        <span>Increases emissions</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 bg-green-500 rounded"></div>
+                        <span>Decreases emissions</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
