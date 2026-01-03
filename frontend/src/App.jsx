@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { Activity, Zap, AlertCircle, TrendingUp, Info, Cloud, Wind, Droplets, Sun, CloudRain, Lightbulb, BarChart3 } from 'lucide-react';
+import { Activity, Zap, AlertCircle, TrendingUp, Info, Cloud, Wind, Droplets, Sun, CloudRain, Lightbulb, BarChart3, Car, Navigation, Clock, Calendar } from 'lucide-react';
 
 export default function CarbonSenseApp() {
   const [domain, setDomain] = useState('transport');
@@ -10,10 +10,17 @@ export default function CarbonSenseApp() {
     hour: 12,
     day_of_week: 3,
     is_weekend: 0,
-    location: 'UK'
+    location: 'UK',
+    vehicle_type: 'petrol_car',
+    start_lat: null,
+    start_lon: null,
+    end_lat: null,
+    end_lon: null
   });
   const [predictions, setPredictions] = useState(null);
+  const [optimization, setOptimization] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingOptimization, setLoadingOptimization] = useState(false);
   const [error, setError] = useState(null);
   const [history, setHistory] = useState([]);
 
@@ -28,6 +35,11 @@ export default function CarbonSenseApp() {
         day_of_week: parseInt(formData.day_of_week),
         is_weekend: parseInt(formData.is_weekend),
         location: formData.location,
+        vehicle_type: formData.vehicle_type,
+        start_lat: formData.start_lat,
+        start_lon: formData.start_lon,
+        end_lat: formData.end_lat,
+        end_lon: formData.end_lon,
         ...(domain === 'transport' ? { distance_km: parseFloat(formData.distance_km) } : { kwh: parseFloat(formData.kwh) })
       };
 
@@ -63,12 +75,49 @@ export default function CarbonSenseApp() {
     }
   };
 
+  const handleOptimize = async () => {
+    setLoadingOptimization(true);
+    
+    try {
+      const payload = {
+        domain,
+        hour: parseInt(formData.hour),
+        day_of_week: parseInt(formData.day_of_week),
+        is_weekend: parseInt(formData.is_weekend),
+        location: formData.location,
+        vehicle_type: formData.vehicle_type,
+        ...(domain === 'transport' ? { distance_km: parseFloat(formData.distance_km) } : { kwh: parseFloat(formData.kwh) })
+      };
+
+      console.log('🔍 Requesting optimization:', payload);
+
+      const response = await fetch('http://localhost:8000/optimize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) throw new Error('Optimization failed');
+      
+      const data = await response.json();
+      console.log('📊 Optimization data:', data);
+      setOptimization(data.optimization);
+      
+    } catch (err) {
+      console.error('Optimization error:', err);
+      setError(err.message);
+    } finally {
+      setLoadingOptimization(false);
+    }
+  };
+
   const modelColors = {
     linear: '#3b82f6',
     rf: '#10b981',
     xgb: '#f59e0b',
     bayesian: '#8b5cf6',
-    context_aware: '#ec4899'
+    context_aware: '#ec4899',
+    traffic_aware: '#f97316'
   };
 
   const modelComparisonData = predictions?.predictions ? Object.entries(predictions.predictions).map(([name, data]) => ({
@@ -157,18 +206,103 @@ export default function CarbonSenseApp() {
             )}
           </div>
           
-          {domain === 'energy' && (
+          {/* Location Selector */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2">📍 Location</label>
+            <select
+              value={formData.location}
+              onChange={e => setFormData({...formData, location: e.target.value})}
+              className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
+            >
+              <option value="UK">🇬🇧 United Kingdom (London)</option>
+              <option value="California">🇺🇸 California (San Francisco)</option>
+              <option value="India">🇮🇳 India (Hyderabad)</option>
+            </select>
+          </div>
+          
+          {/* Vehicle Type Selector (Transport only) */}
+          {domain === 'transport' && (
             <div className="mb-4">
-              <label className="block text-sm font-medium mb-2">📍 Location (Grid)</label>
+              <label className="block text-sm font-medium mb-2">🚗 Vehicle Type</label>
               <select
-                value={formData.location}
-                onChange={e => setFormData({...formData, location: e.target.value})}
+                value={formData.vehicle_type}
+                onChange={e => setFormData({...formData, vehicle_type: e.target.value})}
                 className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
               >
-                <option value="UK">🇬🇧 United Kingdom</option>
-                <option value="California">🇺🇸 California</option>
-                <option value="India">🇮🇳 India</option>
+                <option value="petrol_car">⛽ Petrol Car (0.17 kg/km)</option>
+                <option value="diesel_car">🛢️ Diesel Car (0.165 kg/km)</option>
+                <option value="hybrid">🔋 Hybrid (0.11 kg/km)</option>
+                <option value="electric">⚡ Electric (0.053 kg/km)</option>
+                <option value="motorcycle">🏍️ Motorcycle (0.113 kg/km)</option>
+                <option value="bus">🚌 Bus (0.089 kg/km)</option>
+                <option value="train">🚆 Train (0.041 kg/km)</option>
+                <option value="bicycle">🚴 Bicycle (0 kg/km)</option>
+                <option value="walking">🚶 Walking (0 kg/km)</option>
               </select>
+            </div>
+          )}
+          
+          {/* Optional: Route Coordinates for Accurate Traffic */}
+          {domain === 'transport' && (
+            <div className="mb-4">
+              <details className="bg-gray-700 bg-opacity-30 rounded-lg p-3">
+                <summary className="text-sm font-medium cursor-pointer text-gray-300 hover:text-white">
+                  🗺️ Optional: Set Route Coordinates (Advanced)
+                </summary>
+                <div className="mt-3 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs text-gray-400">Start Latitude</label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        placeholder="e.g., 51.5074"
+                        value={formData.start_lat || ''}
+                        onChange={e => setFormData({...formData, start_lat: e.target.value ? parseFloat(e.target.value) : null})}
+                        className="w-full px-2 py-2 text-sm bg-gray-600 rounded border border-gray-500 focus:border-green-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400">Start Longitude</label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        placeholder="e.g., -0.1278"
+                        value={formData.start_lon || ''}
+                        onChange={e => setFormData({...formData, start_lon: e.target.value ? parseFloat(e.target.value) : null})}
+                        className="w-full px-2 py-2 text-sm bg-gray-600 rounded border border-gray-500 focus:border-green-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs text-gray-400">End Latitude</label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        placeholder="e.g., 51.5524"
+                        value={formData.end_lat || ''}
+                        onChange={e => setFormData({...formData, end_lat: e.target.value ? parseFloat(e.target.value) : null})}
+                        className="w-full px-2 py-2 text-sm bg-gray-600 rounded border border-gray-500 focus:border-green-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400">End Longitude</label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        placeholder="e.g., -0.1278"
+                        value={formData.end_lon || ''}
+                        onChange={e => setFormData({...formData, end_lon: e.target.value ? parseFloat(e.target.value) : null})}
+                        className="w-full px-2 py-2 text-sm bg-gray-600 rounded border border-gray-500 focus:border-green-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    💡 Leave empty to use default city center. For accurate traffic, enter your actual route coordinates.
+                  </p>
+                </div>
+              </details>
             </div>
           )}
 
@@ -212,9 +346,17 @@ export default function CarbonSenseApp() {
           <button
             onClick={handlePredict}
             disabled={loading}
-            className="w-full py-4 bg-gradient-to-r from-green-500 to-blue-500 rounded-lg font-bold text-lg hover:from-green-600 hover:to-blue-600 transition-all shadow-lg shadow-green-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-4 bg-gradient-to-r from-green-500 to-blue-500 rounded-lg font-bold text-lg hover:from-green-600 hover:to-blue-600 transition-all shadow-lg shadow-green-500/30 disabled:opacity-50 disabled:cursor-not-allowed mb-3"
           >
             {loading ? 'Predicting...' : '🚀 Predict Emissions'}
+          </button>
+
+          <button
+            onClick={handleOptimize}
+            disabled={loadingOptimization}
+            className="w-full py-3 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg font-semibold hover:from-purple-600 hover:to-pink-600 transition-all shadow-lg shadow-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loadingOptimization ? 'Optimizing...' : '⏰ Find Best Time (24h)'}
           </button>
 
           {error && (
@@ -227,6 +369,336 @@ export default function CarbonSenseApp() {
 
         {/* Results Panel */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Temporal Optimization Results */}
+          {optimization && (
+            <div className="bg-gradient-to-r from-purple-900 to-pink-900 rounded-2xl p-6 shadow-2xl border-2 border-purple-500">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 bg-purple-500 rounded-lg flex items-center justify-center">
+                  <Clock className="w-7 h-7 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold text-white">
+                    ⏰ Optimal Timing Analysis (Next 24h)
+                  </h3>
+                  <div className="text-sm text-gray-300">
+                    {optimization.recommendation}
+                  </div>
+                </div>
+              </div>
+
+              {/* Current vs Optimal */}
+              {optimization.current_time && (
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="bg-gray-800 bg-opacity-40 rounded-lg p-4">
+                    <div className="text-sm text-gray-300 mb-1">Current Time</div>
+                    <div className="text-2xl font-bold text-yellow-400">
+                      {optimization.current_time.time}
+                    </div>
+                    <div className="text-sm text-gray-400">
+                      {optimization.current_time.estimated_emissions.toFixed(3)} kg CO₂
+                    </div>
+                  </div>
+                  <div className="bg-gray-800 bg-opacity-40 rounded-lg p-4">
+                    <div className="text-sm text-gray-300 mb-1">Optimal Time</div>
+                    <div className="text-2xl font-bold text-green-400">
+                      {optimization.optimal_time.time}
+                    </div>
+                    <div className="text-sm text-gray-400">
+                      {optimization.optimal_time.estimated_emissions.toFixed(3)} kg CO₂
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Potential Savings */}
+              {optimization.potential_savings.percent > 0 && (
+                <div className="bg-green-500 bg-opacity-20 border border-green-400 rounded-lg p-4 mb-4">
+                  <div className="text-lg font-bold text-green-300">
+                    💰 Potential Savings: {optimization.potential_savings.percent}%
+                  </div>
+                  <div className="text-sm text-gray-300">
+                    Save {optimization.potential_savings.absolute_kg.toFixed(3)} kg CO₂ by timing your activity optimally
+                  </div>
+                </div>
+              )}
+
+              {/* Insights */}
+              {optimization.insights && optimization.insights.length > 0 && (
+                <div className="bg-purple-500 bg-opacity-20 border border-purple-400 rounded-lg p-4 mb-4">
+                  <h4 className="text-sm font-semibold text-purple-200 mb-2">💡 Key Insights:</h4>
+                  <ul className="space-y-1">
+                    {optimization.insights.map((insight, i) => (
+                      <li key={i} className="text-sm text-gray-300">{insight}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Best Times */}
+              <div className="mb-4">
+                <h4 className="text-sm font-semibold text-gray-200 mb-3 flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-green-400" />
+                  Top 5 Best Times
+                </h4>
+                <div className="space-y-2">
+                  {optimization.best_times.map((time, idx) => (
+                    <div key={idx} className="bg-gray-800 bg-opacity-40 rounded-lg p-3 flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold text-white flex items-center gap-2">
+                          #{idx + 1} {time.time} ({time.day})
+                          {time.confidence && (
+                            <span className={`text-xs px-2 py-0.5 rounded ${
+                              time.confidence === 'high' ? 'bg-green-500 bg-opacity-20 text-green-300' :
+                              time.confidence === 'medium' ? 'bg-yellow-500 bg-opacity-20 text-yellow-300' :
+                              'bg-gray-500 bg-opacity-20 text-gray-300'
+                            }`}>
+                              {time.confidence} confidence
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-400">
+                          {domain === 'energy' 
+                            ? `Grid: ${time.grid_intensity?.toFixed(0)} gCO₂/kWh`
+                            : `Traffic: ${time.traffic_factor}x multiplier`
+                          }
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg font-bold text-green-400">
+                          {time.estimated_emissions.toFixed(3)}
+                        </div>
+                        <div className="text-xs text-gray-400">kg CO₂</div>
+                        {time.savings_percent > 0 && (
+                          <div className="text-xs text-green-400">-{time.savings_percent}%</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Worst Times */}
+              <div>
+                <h4 className="text-sm font-semibold text-gray-200 mb-3 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-400" />
+                  Times to Avoid
+                </h4>
+                <div className="space-y-2">
+                  {optimization.worst_times.map((time, idx) => (
+                    <div key={idx} className="bg-red-900 bg-opacity-30 border border-red-700 rounded-lg p-3 flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold text-white">
+                          {time.time} ({time.day})
+                        </div>
+                        <div className="text-xs text-gray-400">
+                          {domain === 'energy' 
+                            ? `Grid: ${time.grid_intensity?.toFixed(0)} gCO₂/kWh`
+                            : `Traffic: ${time.traffic_factor}x multiplier`
+                          }
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg font-bold text-red-400">
+                          {time.estimated_emissions.toFixed(3)}
+                        </div>
+                        <div className="text-xs text-gray-400">kg CO₂</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Methodology & Confidence */}
+              {optimization.methodology && (
+                <div className="mt-4 bg-gray-800 bg-opacity-40 border border-gray-600 rounded-lg p-4">
+                  <details>
+                    <summary className="text-sm font-semibold text-gray-300 cursor-pointer hover:text-white">
+                      📊 Forecast Methodology & Confidence
+                    </summary>
+                    <div className="mt-3 space-y-2 text-xs text-gray-400">
+                      <div>
+                        <span className="font-semibold text-gray-300">Type:</span> {optimization.methodology.type}
+                      </div>
+                      <div>
+                        <span className="font-semibold text-gray-300">Description:</span> {optimization.methodology.description}
+                      </div>
+                      <div>
+                        <span className="font-semibold text-gray-300">Data Sources:</span>
+                        <ul className="ml-4 mt-1">
+                          {Object.entries(optimization.methodology.data_sources).map(([key, value]) => (
+                            <li key={key}>• {key}: {value}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div className="text-yellow-400 mt-2">
+                        ⚠️ {optimization.methodology.limitations}
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Combined Context Score Card */}
+          {predictions?.context_score && (
+            <div className={`bg-gradient-to-r ${
+              predictions.context_score.rating_color === 'green' ? 'from-green-900 to-emerald-900 border-green-500' :
+              predictions.context_score.rating_color === 'lime' ? 'from-lime-900 to-green-900 border-lime-500' :
+              predictions.context_score.rating_color === 'yellow' ? 'from-yellow-900 to-amber-900 border-yellow-500' :
+              predictions.context_score.rating_color === 'orange' ? 'from-orange-900 to-red-900 border-orange-500' :
+              'from-red-900 to-pink-900 border-red-500'
+            } rounded-2xl p-6 shadow-2xl border-2`}>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-3xl font-bold text-white mb-1">
+                    {predictions.context_score.rating_emoji} Context Score: {predictions.context_score.score}/100
+                  </h3>
+                  <div className="text-xl font-semibold text-gray-200">
+                    {predictions.context_score.rating}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-6xl">{predictions.context_score.rating_emoji}</div>
+                </div>
+              </div>
+              
+              {/* Score Bar */}
+              <div className="mb-4">
+                <div className="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
+                  <div
+                    className={`h-4 rounded-full transition-all duration-500 ${
+                      predictions.context_score.rating_color === 'green' ? 'bg-green-500' :
+                      predictions.context_score.rating_color === 'lime' ? 'bg-lime-500' :
+                      predictions.context_score.rating_color === 'yellow' ? 'bg-yellow-500' :
+                      predictions.context_score.rating_color === 'orange' ? 'bg-orange-500' :
+                      'bg-red-500'
+                    }`}
+                    style={{ width: `${predictions.context_score.score}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-gray-400 mt-1">
+                  <span>0 (Worst)</span>
+                  <span>50 (Average)</span>
+                  <span>100 (Best)</span>
+                </div>
+              </div>
+              
+              {/* Message */}
+              <div className="bg-white bg-opacity-10 rounded-lg p-3 mb-4">
+                <p className="text-sm text-white font-medium">
+                  {predictions.context_score.message}
+                </p>
+              </div>
+              
+              {/* Contributing Factors */}
+              {predictions.context_score.factors.length > 0 && (
+                <div className="bg-gray-800 bg-opacity-40 rounded-lg p-4">
+                  <h4 className="text-sm font-semibold text-gray-200 mb-2">Contributing Factors:</h4>
+                  <ul className="space-y-1">
+                    {predictions.context_score.factors.map((factor, i) => (
+                      <li key={i} className="text-xs text-gray-300">{factor}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              
+              {/* Breakdown */}
+              {predictions.context_score.breakdown && (
+                <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                  {Object.entries(predictions.context_score.breakdown).map(([key, value]) => 
+                    value !== null && (
+                      <div key={key} className="bg-gray-800 bg-opacity-40 rounded px-2 py-1">
+                        <span className="text-gray-400 capitalize">{key}:</span>
+                        <span className="text-white font-semibold ml-1">{value}</span>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Traffic Context Card (for Transport) */}
+          {predictions?.traffic_context && predictions.traffic_context.success && (
+            <div className="bg-gradient-to-r from-orange-900 to-red-900 rounded-2xl p-6 shadow-2xl border-2 border-orange-500">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-orange-500 rounded-lg flex items-center justify-center">
+                    <Car className="w-7 h-7 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-bold text-white">
+                      Traffic Impact: {predictions.traffic_context.condition}
+                    </h3>
+                    <div className="text-sm text-gray-300">
+                      {predictions.traffic_context.source}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-4xl">
+                  {predictions.traffic_context.condition.includes('Heavy') || predictions.traffic_context.condition.includes('Severe') ? '🚗🚙🚕' :
+                   predictions.traffic_context.condition.includes('Moderate') ? '🚗🚙' :
+                   predictions.traffic_context.condition.includes('Light') ? '🚗' : '🛣️'}
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-4 bg-gray-800 bg-opacity-40 rounded-xl p-4">
+                <div>
+                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                    <Navigation className="w-4 h-4" />
+                    Delay Factor
+                  </div>
+                  <div className="text-3xl font-bold text-orange-400">
+                    {predictions.traffic_context.delay_factor}x
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    +{predictions.traffic_context.delay_minutes.toFixed(0)} min delay
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                    <AlertCircle className="w-4 h-4" />
+                    Emission Impact
+                  </div>
+                  <div className="text-3xl font-bold text-red-400">
+                    +{((predictions.traffic_context.emission_multiplier - 1) * 100).toFixed(0)}%
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    {predictions.traffic_context.emission_multiplier}x multiplier
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                    <TrendingUp className="w-4 h-4" />
+                    Travel Time
+                  </div>
+                  <div className="text-3xl font-bold text-yellow-400">
+                    {predictions.traffic_context.travel_time_minutes.toFixed(0)}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    vs {predictions.traffic_context.travel_time_no_traffic.toFixed(0)} min normal
+                  </div>
+                </div>
+              </div>
+              
+              <div className="mt-4 p-3 bg-orange-500 bg-opacity-20 rounded-lg border border-orange-400">
+                <div className="text-sm text-orange-100">
+                  {predictions.traffic_context.message}
+                </div>
+                {predictions.traffic_context.note && (
+                  <div className="text-xs text-gray-300 mt-2">
+                    ℹ️ {predictions.traffic_context.note}
+                  </div>
+                )}
+              </div>
+              
+              <div className="mt-3 text-xs text-gray-400">
+                Confidence: {predictions.traffic_context.confidence} • 
+                Method: {predictions.traffic_context.method}
+              </div>
+            </div>
+          )}
+          
           {/* Weather Context Card */}
           {predictions?.weather_context && predictions.weather_context.success && (
             <div className="bg-gradient-to-r from-blue-900 to-cyan-900 rounded-2xl p-6 shadow-2xl border-2 border-blue-500">
@@ -291,16 +763,37 @@ export default function CarbonSenseApp() {
               
               <div className="mt-4 p-3 bg-blue-500 bg-opacity-20 rounded-lg border border-blue-400">
                 <div className="text-sm font-semibold text-blue-200 mb-2">
-                  Carbon Impact: {predictions.weather_context.impact.score > 0 ? '📈' : '📉'} 
-                  {Math.abs(predictions.weather_context.impact.score)}% {predictions.weather_context.impact.score > 0 ? 'increase' : 'decrease'}
+                  {domain === 'energy' ? '⚡ Grid Impact' : '🚗 Fuel Efficiency Impact'}
                 </div>
-                <div className="text-xs text-gray-300">{predictions.weather_context.impact.message}</div>
-                {predictions.weather_context.impact.factors.length > 0 && (
-                  <ul className="mt-2 space-y-1">
-                    {predictions.weather_context.impact.factors.map((factor, i) => (
-                      <li key={i} className="text-xs text-gray-300">• {factor}</li>
-                    ))}
-                  </ul>
+                {domain === 'energy' ? (
+                  <>
+                    <div className="text-sm text-gray-300">
+                      Carbon Impact: {predictions.weather_context.impact.score > 0 ? '📈' : '📉'} 
+                      {Math.abs(predictions.weather_context.impact.score)}% {predictions.weather_context.impact.score > 0 ? 'increase' : 'decrease'}
+                    </div>
+                    <div className="text-xs text-gray-300 mt-1">{predictions.weather_context.impact.message}</div>
+                    {predictions.weather_context.impact.factors.length > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {predictions.weather_context.impact.factors.map((factor, i) => (
+                          <li key={i} className="text-xs text-gray-300">• {factor}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm text-gray-300">
+                      {predictions.predictions?.context_aware?.adjustments?.weather_multiplier && (
+                        <>
+                          Fuel consumption: {((predictions.predictions.context_aware.adjustments.weather_multiplier - 1) * 100).toFixed(0) > 0 ? '+' : ''}
+                          {((predictions.predictions.context_aware.adjustments.weather_multiplier - 1) * 100).toFixed(0)}% 
+                          {predictions.weather_context.temperature < 10 ? ' (cold engine warmup)' : 
+                           predictions.weather_context.temperature > 28 ? ' (AC usage)' : 
+                           predictions.weather_context.condition === 'Rain' ? ' (wet roads)' : ''}
+                        </>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             </div>

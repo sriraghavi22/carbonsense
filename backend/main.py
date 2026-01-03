@@ -14,6 +14,21 @@ import sys
 sys.path.append(str(Path(__file__).parent))
 from grid_service import get_grid_service
 
+from traffic_service import get_traffic_service
+from optimization_service import get_optimization_service
+
+VEHICLE_EMISSION_FACTORS = {
+    "petrol_car": 0.170,      # kg CO2/km - average petrol car
+    "diesel_car": 0.165,      # kg CO2/km - average diesel
+    "hybrid": 0.110,          # kg CO2/km - hybrid
+    "electric": 0.053,        # kg CO2/km - EV (indirect from grid)
+    "motorcycle": 0.113,      # kg CO2/km
+    "bus": 0.089,             # kg CO2/km per passenger
+    "train": 0.041,           # kg CO2/km per passenger
+    "bicycle": 0.000,         # kg CO2/km - zero emissions!
+    "walking": 0.000          # kg CO2/km - zero emissions!
+}
+
 app = FastAPI(title="CarbonSense API v2.0 - Context-Aware with Explainability")
 
 app.add_middleware(
@@ -62,6 +77,11 @@ for domain in valid_domains:
 grid_service = get_grid_service()
 print("✅ Grid intensity service initialized")
 
+traffic_service = get_traffic_service()
+print("✅ Traffic service initialized")
+
+optimization_service = get_optimization_service(grid_service, traffic_service)
+print("✅ Optimization service initialized")
 
 class PredictRequest(BaseModel):
     domain: Literal["transport", "energy"]
@@ -71,7 +91,11 @@ class PredictRequest(BaseModel):
     day_of_week: int = Field(3, ge=0, le=6)
     is_weekend: int = Field(0, ge=0, le=1)
     location: str = Field("UK", description="Location for grid intensity (UK, India, California)")
-
+    vehicle_type: str = Field("petrol_car", description="Vehicle type for transport")
+    start_lat: Optional[float] = None
+    start_lon: Optional[float] = None
+    end_lat: Optional[float] = None
+    end_lon: Optional[float] = None
 
 @app.post("/predict")
 async def predict(request: PredictRequest):
@@ -82,9 +106,43 @@ async def predict(request: PredictRequest):
     if domain == "energy" and request.kwh is None:
         raise HTTPException(400, "kwh required")
     
-    # Get real-time grid intensity and weather for energy domain
+    # Context holders
     grid_context = None
     weather_context = None
+    traffic_context = None
+
+    if domain == "transport":
+        # Fetch weather for transport efficiency
+        weather_context = grid_service.get_weather(request.location)
+
+        start_coords = None
+        end_coords = None
+        
+        # If user provided coordinates, use them
+        if request.start_lat and request.start_lon and request.end_lat and request.end_lon:
+            start_coords = (request.start_lat, request.start_lon)
+            end_coords = (request.end_lat, request.end_lon)
+        else:
+            # Use representative route based on distance
+            default_coords = traffic_service.get_location_coords(request.location)
+            lat_offset = request.distance_km / 111.0  # ~1 degree latitude ≈ 111 km
+            start_coords = default_coords
+            end_coords = (default_coords[0] + lat_offset, default_coords[1])
+
+        print(f"🚗 Getting traffic for route: {start_coords} → {end_coords}")
+
+        traffic_context = traffic_service.get_traffic_impact(
+            distance_km=request.distance_km,
+            location=request.location,
+            start_coords=start_coords,
+            end_coords=end_coords
+        )
+
+        print(
+            f"🚦 Traffic: {traffic_context.get('condition', 'Unknown')}, "
+            f"method: {traffic_context.get('method', 'Unknown')}"
+        )
+
     if domain == "energy":
         grid_context = grid_service.get_intensity(
             location=request.location,
@@ -93,51 +151,71 @@ async def predict(request: PredictRequest):
         )
         # Add weather data
         weather_context = grid_service.get_weather(request.location)
-    
-    # Prepare features with proper column names
+
     if domain == "transport":
         feature_names = ['distance_km', 'hour', 'day_of_week', 'is_weekend']
         features = [request.distance_km, request.hour, request.day_of_week, request.is_weekend]
     else:
         feature_names = ['kWh', 'hour', 'day_of_week', 'is_weekend']
         features = [request.kwh, request.hour, request.day_of_week, request.is_weekend]
-    
-    # Use pandas DataFrame to preserve feature names
+
     X = pd.DataFrame([features], columns=feature_names)
+
     results = {}
     shap_values_result = {}
-    
-    # Get predictions from all models
+
+    # ---------------- MODEL PREDICTIONS ----------------
     for model_name, model in models.get(domain, {}).items():
         try:
             if model_name == "bayesian":
                 pred, std = model.predict(X, return_std=True)
+                base_pred = float(pred[0])
+
+                adjustment = 1.0
+
+                # Adjust for vehicle type (transport only)
+                if domain == "transport":
+                    vehicle_factor = VEHICLE_EMISSION_FACTORS.get(
+                        request.vehicle_type, 0.170
+                    )
+                    default_factor = 0.150  # training baseline
+                    adjustment = vehicle_factor / default_factor
+                    base_pred *= adjustment
+
                 results[model_name] = {
-                    "mean": float(pred[0]),
-                    "std": float(std[0]),
-                    "ci_lower": float(pred[0] - 1.96*std[0]),
-                    "ci_upper": float(pred[0] + 1.96*std[0])
+                    "mean": base_pred,
+                    "std": float(std[0]) * adjustment,
+                    "ci_lower": float((pred[0] - 1.96 * std[0]) * adjustment),
+                    "ci_upper": float((pred[0] + 1.96 * std[0]) * adjustment)
                 }
+
             else:
                 pred = model.predict(X)[0]
+
+                # Adjust for vehicle type (transport only)
+                if domain == "transport":
+                    vehicle_factor = VEHICLE_EMISSION_FACTORS.get(
+                        request.vehicle_type, 0.170
+                    )
+                    default_factor = 0.150
+                    adjustment = vehicle_factor / default_factor
+                    pred *= adjustment
+
                 results[model_name] = {"mean": float(pred)}
-            
-            # Generate SHAP values for tree models
+
+            # SHAP explainability
             if model_name in ["rf", "xgb"] and model_name in explainers.get(domain, {}):
                 try:
                     explainer = explainers[domain][model_name]
                     shap_values = explainer.shap_values(X)
-                    
-                    # For regression, shap_values is 1D array
+
                     if isinstance(shap_values, list):
                         shap_values = shap_values[0]
-                    
-                    # Get base value (expected value)
+
                     base_value = explainer.expected_value
                     if isinstance(base_value, list):
                         base_value = base_value[0]
-                    
-                    # Create feature importance data
+
                     feature_importance = []
                     for i, feature_name in enumerate(feature_names):
                         feature_importance.append({
@@ -146,42 +224,38 @@ async def predict(request: PredictRequest):
                             "shap_value": float(shap_values[0][i]),
                             "contribution": float(shap_values[0][i])
                         })
-                    
-                    # Sort by absolute contribution
-                    feature_importance.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
-                    
+
+                    feature_importance.sort(
+                        key=lambda x: abs(x["shap_value"]),
+                        reverse=True
+                    )
+
                     shap_values_result[model_name] = {
                         "base_value": float(base_value),
                         "prediction": float(pred),
                         "feature_importance": feature_importance,
                         "explanation": generate_explanation(feature_importance, domain)
                     }
-                    
+
                 except Exception as e:
                     print(f"SHAP calculation error for {model_name}: {e}")
                     shap_values_result[model_name] = {"error": str(e)}
-                    
+
         except Exception as e:
             results[model_name] = {"error": str(e)}
-    
-    # Add context-aware adjustment for energy
+
     if domain == "energy" and grid_context and "bayesian" in results and "mean" in results["bayesian"]:
-        # Calculate adjusted emissions using real-time grid intensity
-        static_intensity = 400  # Default used in training (gCO2/kWh)
+        static_intensity = 400
         live_intensity = grid_context["intensity_gco2_kwh"]
-        
-        # Adjust predictions based on live vs static grid
         adjustment_factor = live_intensity / static_intensity
-        
-        # Apply weather impact if available
+
         weather_adjustment = 1.0
         if weather_context and weather_context.get("success"):
-            # Apply weather impact score as percentage adjustment
             impact_score = weather_context["impact"]["score"]
             weather_adjustment = 1.0 + (impact_score / 100.0)
-        
+
         final_adjustment = adjustment_factor * weather_adjustment
-        
+
         results["context_aware"] = {
             "mean": results["bayesian"]["mean"] * final_adjustment,
             "ci_lower": results["bayesian"]["ci_lower"] * final_adjustment,
@@ -193,17 +267,76 @@ async def predict(request: PredictRequest):
                 "total_factor": round(final_adjustment, 3)
             }
         }
-    
-    # Build response
+
+    if domain == "transport" and "rf" in results and "mean" in results["rf"]:
+        base_prediction = results["rf"]["mean"]
+
+        traffic_multiplier = 1.0
+        if traffic_context and traffic_context.get("success"):
+            traffic_multiplier = traffic_context.get("emission_multiplier", 1.0)
+
+        weather_multiplier = 1.0
+        if weather_context and weather_context.get("success"):
+            temp = weather_context.get("temperature", 20)
+            condition = weather_context.get("condition", "Clear")
+            wind_speed = weather_context.get("wind_speed", 0)
+
+            if temp < 0:
+                weather_multiplier += 0.25
+            elif temp < 10:
+                weather_multiplier += 0.15
+            elif temp > 32:
+                weather_multiplier += 0.20
+            elif temp > 28:
+                weather_multiplier += 0.10
+
+            if wind_speed > 10:
+                weather_multiplier += 0.08
+            elif wind_speed > 7:
+                weather_multiplier += 0.05
+
+            if condition in ["Rain", "Snow", "Drizzle"]:
+                weather_multiplier += 0.10
+
+        final_multiplier = traffic_multiplier * weather_multiplier
+
+        results["context_aware"] = {
+            "mean": base_prediction * final_multiplier,
+            "description": "Adjusted for real-time traffic and weather conditions",
+            "adjustments": {
+                "traffic_multiplier": round(traffic_multiplier, 3),
+                "weather_multiplier": round(weather_multiplier, 3),
+                "total_multiplier": round(final_multiplier, 3)
+            },
+            "base_emissions": base_prediction
+        }
+
+        # Keep existing traffic-only output (backward compatible)
+        results["traffic_aware"] = {
+            "mean": base_prediction * traffic_multiplier,
+            "description": "Adjusted for real-time traffic conditions",
+            "traffic_multiplier": traffic_multiplier,
+            "base_emissions": base_prediction
+        }
+
+    context_score = calculate_context_score(
+        domain=domain,
+        traffic_context=traffic_context,
+        weather_context=weather_context,
+        grid_context=grid_context,
+        hour=request.hour,
+        is_weekend=request.is_weekend
+    )
+
     response = {
         "status": "success",
         "domain": domain,
         "predictions": results,
         "models_used": list(results.keys()),
-        "explainability": shap_values_result
+        "explainability": shap_values_result,
+        "context_score": context_score
     }
-    
-    # Add grid context for energy
+
     if grid_context:
         response["grid_context"] = {
             "intensity_gco2_kwh": grid_context["intensity_gco2_kwh"],
@@ -213,8 +346,7 @@ async def predict(request: PredictRequest):
             "method": grid_context["method"],
             "timestamp": grid_context["timestamp"]
         }
-        
-        # Add comparison message
+
         if domain == "energy":
             comparison = grid_service.compare_live_vs_static(request.location)
             response["grid_context"]["comparison"] = {
@@ -222,11 +354,13 @@ async def predict(request: PredictRequest):
                 "difference_percent": comparison["difference_percent"],
                 "message": comparison["message"]
             }
-    
-    # Add weather context
+
     if weather_context and weather_context.get("success"):
         response["weather_context"] = weather_context
-    
+
+    if traffic_context and traffic_context.get("success"):
+        response["traffic_context"] = traffic_context
+
     return response
 
 
@@ -310,6 +444,244 @@ async def health():
         ]
     }
 
+@app.post("/optimize")
+async def optimize_timing(request: PredictRequest):
+    """Get optimal timing recommendations for the next 24 hours"""
+    
+    domain = request.domain
+    
+    if domain == "transport" and request.distance_km is None:
+        raise HTTPException(400, "distance_km required")
+    if domain == "energy" and request.kwh is None:
+        raise HTTPException(400, "kwh required")
+    
+    try:
+        optimization = optimization_service.get_optimal_times(
+            domain=domain,
+            location=request.location,
+            distance_km=request.distance_km if domain == "transport" else None,
+            kwh=request.kwh if domain == "energy" else None,
+            vehicle_type=request.vehicle_type if domain == "transport" else "petrol_car"
+        )
+        
+        return {
+            "status": "success",
+            "domain": domain,
+            "optimization": optimization
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Optimization failed: {str(e)}")
+
+def calculate_context_score(
+    domain: str,
+    traffic_context: Optional[Dict],
+    weather_context: Optional[Dict],
+    grid_context: Optional[Dict],
+    hour: int,
+    is_weekend: int
+) -> Dict:
+    """
+    Calculate unified context score combining all factors
+    Score: 0-100 (0 = worst conditions, 100 = best conditions for low emissions)
+    """
+    
+    score = 50  # Start neutral
+    factors = []
+    weights = {}
+    
+    if domain == "transport":
+        # Traffic Score (40% weight)
+        if traffic_context and traffic_context.get("success"):
+            traffic_multiplier = traffic_context.get("emission_multiplier", 1.0)
+            if traffic_multiplier >= 1.8:
+                traffic_score = 0
+                factors.append("🚨 Severe traffic congestion (-40)")
+            elif traffic_multiplier >= 1.5:
+                traffic_score = -30
+                factors.append("⚠️ Heavy traffic (-30)")
+            elif traffic_multiplier >= 1.3:
+                traffic_score = -15
+                factors.append("🟡 Moderate traffic (-15)")
+            elif traffic_multiplier >= 1.1:
+                traffic_score = -5
+                factors.append("🟢 Light traffic (-5)")
+            else:
+                traffic_score = 10
+                factors.append("✅ Free-flowing traffic (+10)")
+            
+            score += traffic_score
+            weights["traffic"] = abs(traffic_score)
+        
+        # Weather Score (30% weight)
+        if weather_context and weather_context.get("success"):
+            temp = weather_context.get("temperature", 20)
+            condition = weather_context.get("condition", "Clear")
+            
+            if temp < 0:
+                weather_score = -25
+                factors.append("❄️ Freezing temps reduce efficiency (-25)")
+            elif temp < 10:
+                weather_score = -15
+                factors.append("🥶 Cold weather impact (-15)")
+            elif temp > 32:
+                weather_score = -20
+                factors.append("🥵 Extreme heat (AC usage) (-20)")
+            elif temp > 28:
+                weather_score = -10
+                factors.append("☀️ Hot weather (AC) (-10)")
+            elif 18 <= temp <= 24:
+                weather_score = 5
+                factors.append("🌤️ Ideal temperature (+5)")
+            else:
+                weather_score = 0
+            
+            if condition in ["Rain", "Snow"]:
+                weather_score -= 10
+                factors.append(f"🌧️ {condition} reduces efficiency (-10)")
+            
+            score += weather_score
+            weights["weather"] = abs(weather_score)
+        
+        # Time Score (30% weight)
+        if 7 <= hour <= 9 or 17 <= hour <= 19:
+            time_score = -20
+            factors.append("⏰ Rush hour timing (-20)")
+        elif 22 <= hour or hour <= 5:
+            time_score = 15
+            factors.append("🌙 Off-peak hours (+15)")
+        elif is_weekend:
+            time_score = 10
+            factors.append("📅 Weekend travel (+10)")
+        else:
+            time_score = 0
+        
+        score += time_score
+        weights["time"] = abs(time_score)
+        
+    else:  # energy
+        # Grid Intensity Score (50% weight)
+        if grid_context and grid_context.get("intensity_gco2_kwh"):
+            intensity = grid_context["intensity_gco2_kwh"]
+            
+            if intensity < 100:
+                grid_score = 30
+                factors.append("🌱 Very clean grid (<100 gCO₂/kWh) (+30)")
+            elif intensity < 200:
+                grid_score = 20
+                factors.append("✅ Clean grid (<200 gCO₂/kWh) (+20)")
+            elif intensity < 300:
+                grid_score = 10
+                factors.append("🟢 Moderately clean grid (+10)")
+            elif intensity < 400:
+                grid_score = 0
+                factors.append("🟡 Average grid intensity (0)")
+            elif intensity < 500:
+                grid_score = -15
+                factors.append("🟠 Dirty grid (-15)")
+            else:
+                grid_score = -30
+                factors.append("🔴 Very dirty grid (>500 gCO₂/kWh) (-30)")
+            
+            score += grid_score
+            weights["grid"] = abs(grid_score)
+        
+        # Weather/Renewable Score (30% weight)
+        if weather_context and weather_context.get("success"):
+            temp = weather_context.get("temperature", 20)
+            clouds = weather_context.get("clouds", 50)
+            wind_speed = weather_context.get("wind_speed", 0)
+            
+            weather_score = 0
+            
+            # Temperature (HVAC demand)
+            if temp < 10:
+                weather_score -= 15
+                factors.append("🥶 Cold increases heating demand (-15)")
+            elif temp > 28:
+                weather_score -= 20
+                factors.append("🥵 Heat increases cooling demand (-20)")
+            elif 18 <= temp <= 22:
+                weather_score += 10
+                factors.append("🌤️ Mild weather reduces HVAC (+10)")
+            
+            # Solar generation
+            if clouds < 30:
+                weather_score += 5
+                factors.append("☀️ Clear skies boost solar (+5)")
+            
+            # Wind generation
+            if wind_speed > 7:
+                weather_score += 8
+                factors.append("💨 High winds boost wind power (+8)")
+            
+            score += weather_score
+            weights["weather"] = abs(weather_score)
+        
+        # Time Score (20% weight)
+        if 9 <= hour <= 17:
+            time_score = 10
+            factors.append("☀️ Daytime solar generation (+10)")
+        elif 18 <= hour <= 21:
+            time_score = -20
+            factors.append("⚡ Evening peak demand (-20)")
+        elif 22 <= hour or hour <= 5:
+            time_score = 5
+            factors.append("🌙 Night (wind power) (+5)")
+        else:
+            time_score = 0
+        
+        if is_weekend:
+            time_score += 10
+            factors.append("📅 Weekend (lower demand) (+10)")
+        
+        score += time_score
+        weights["time"] = abs(time_score)
+    
+    # Normalize score to 0-100
+    score = max(0, min(100, score))
+    
+    # Determine rating
+    if score >= 80:
+        rating = "Excellent"
+        rating_emoji = "🌟"
+        rating_color = "green"
+        message = "Optimal conditions for low emissions!"
+    elif score >= 65:
+        rating = "Good"
+        rating_emoji = "✅"
+        rating_color = "lime"
+        message = "Favorable conditions for reduced emissions."
+    elif score >= 50:
+        rating = "Fair"
+        rating_emoji = "🟡"
+        rating_color = "yellow"
+        message = "Average conditions - emissions as expected."
+    elif score >= 35:
+        rating = "Poor"
+        rating_emoji = "🟠"
+        rating_color = "orange"
+        message = "Unfavorable conditions increasing emissions."
+    else:
+        rating = "Very Poor"
+        rating_emoji = "🔴"
+        rating_color = "red"
+        message = "High-emission conditions. Consider delaying if possible."
+    
+    return {
+        "score": round(score, 1),
+        "rating": rating,
+        "rating_emoji": rating_emoji,
+        "rating_color": rating_color,
+        "message": message,
+        "factors": factors,
+        "weights": weights,
+        "breakdown": {
+            "traffic": weights.get("traffic", 0) if domain == "transport" else None,
+            "weather": weights.get("weather", 0),
+            "grid": weights.get("grid", 0) if domain == "energy" else None,
+            "time": weights.get("time", 0)
+        }
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
