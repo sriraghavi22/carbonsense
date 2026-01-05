@@ -118,16 +118,16 @@ async def predict(request: PredictRequest):
         start_coords = None
         end_coords = None
         
-        # If user provided coordinates, use them
+        # ALWAYS prefer user-provided coordinates if available
         if request.start_lat and request.start_lon and request.end_lat and request.end_lon:
             start_coords = (request.start_lat, request.start_lon)
             end_coords = (request.end_lat, request.end_lon)
+            print(f"🗺️ Using user-provided coordinates: {start_coords} → {end_coords}")
         else:
-            # Use representative route based on distance
-            default_coords = traffic_service.get_location_coords(request.location)
-            lat_offset = request.distance_km / 111.0  # ~1 degree latitude ≈ 111 km
-            start_coords = default_coords
-            end_coords = (default_coords[0] + lat_offset, default_coords[1])
+            # No coordinates - use time-based estimation only
+            print(f"⚠️ No route coordinates provided - using time-based traffic estimation for {request.location}")
+            start_coords = None
+            end_coords = None
 
         print(f"🚗 Getting traffic for route: {start_coords} → {end_coords}")
 

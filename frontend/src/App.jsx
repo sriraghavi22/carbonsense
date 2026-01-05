@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { Activity, Zap, AlertCircle, TrendingUp, Info, Cloud, Wind, Droplets, Sun, CloudRain, Lightbulb, BarChart3, Car, Navigation, Clock, Calendar } from 'lucide-react';
+import { Activity, Zap, AlertCircle, TrendingUp, Info, Cloud, Wind, Droplets, Sun, CloudRain, Lightbulb, BarChart3, Car, Navigation, Clock, Calendar, MapPin, Search, Map as MapIcon, X } from 'lucide-react';
 
 export default function CarbonSenseApp() {
   const [domain, setDomain] = useState('transport');
@@ -15,8 +15,25 @@ export default function CarbonSenseApp() {
     start_lat: null,
     start_lon: null,
     end_lat: null,
-    end_lon: null
+    end_lon: null,
+    start_location_name: '',
+    end_location_name: ''
   });
+  const [locationSearch, setLocationSearch] = useState({
+    start: '',
+    end: '',
+    startSuggestions: [],
+    endSuggestions: [],
+    searchingStart: false,
+    searchingEnd: false
+  });
+  const [showMap, setShowMap] = useState(false);
+  const [mapMode, setMapMode] = useState(null); // 'start' or 'end'
+  const mapRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+  const startMarkerRef = useRef(null);
+  const endMarkerRef = useRef(null);
+  const routeLineRef = useRef(null);
   const [predictions, setPredictions] = useState(null);
   const [optimization, setOptimization] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -111,6 +128,395 @@ export default function CarbonSenseApp() {
     }
   };
 
+  // Location search with debouncing
+  const searchLocation = async (query, type) => {
+    if (!query || query.length < 3) {
+      setLocationSearch(prev => ({
+        ...prev,
+        [type === 'start' ? 'startSuggestions' : 'endSuggestions']: []
+      }));
+      return;
+    }
+
+    setLocationSearch(prev => ({
+      ...prev,
+      [type === 'start' ? 'searchingStart' : 'searchingEnd']: true
+    }));
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&addressdetails=1`,
+        {
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'CarbonSense/1.0'
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setLocationSearch(prev => ({
+          ...prev,
+          [type === 'start' ? 'startSuggestions' : 'endSuggestions']: data,
+          [type === 'start' ? 'searchingStart' : 'searchingEnd']: false
+        }));
+      }
+    } catch (err) {
+      console.error('Location search error:', err);
+      setLocationSearch(prev => ({
+        ...prev,
+        [type === 'start' ? 'searchingStart' : 'searchingEnd']: false
+      }));
+    }
+  };
+
+  // Debounce helper
+  const debounce = (func, wait) => {
+    let timeout;
+    return (...args) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func(...args), wait);
+    };
+  };
+
+  const debouncedSearch = debounce(searchLocation, 500);
+
+  // Initialize Leaflet map
+  useEffect(() => {
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link');
+      link.id = 'leaflet-css';
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+
+    if (showMap && mapRef.current && !mapInstanceRef.current) {
+    // Dynamically load Leaflet
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.async = true;
+    script.onload = () => {
+      const L = window.L;
+      
+      // Create map
+      const map = L.map(mapRef.current).setView([51.505, -0.09], 6);
+      
+      // Add tile layer
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+      
+      mapInstanceRef.current = map;
+      
+      // Set up click handler immediately after map creation
+      const handleClick = (e) => {
+        if (mapMode === 'start') {
+          setStartMarker(e.latlng.lat, e.latlng.lng);
+          setMapMode('end');
+        } else if (mapMode === 'end') {
+          setEndMarker(e.latlng.lat, e.latlng.lng);
+        }
+      };
+      map.on('click', handleClick);
+      
+      // Add existing markers if they exist
+      if (formData.start_lat && formData.start_lon) {
+        addStartMarkerToMap(formData.start_lat, formData.start_lon);
+      }
+      if (formData.end_lat && formData.end_lon) {
+        addEndMarkerToMap(formData.end_lat, formData.end_lon);
+      }
+    };
+    document.head.appendChild(script);
+  }
+
+  return () => {
+    if (mapInstanceRef.current && !showMap) {
+      if (mapInstanceRef.current._customClickHandler) {
+        mapInstanceRef.current.off('click', mapInstanceRef.current._customClickHandler);
+      }
+      mapInstanceRef.current.remove();
+      mapInstanceRef.current = null;
+    }
+  };
+}, [showMap]);
+
+  // Update route line when markers change
+  useEffect(() => {
+    if (mapInstanceRef.current && formData.start_lat && formData.end_lat) {
+      drawRouteLine();
+    }
+  }, [formData.start_lat, formData.start_lon, formData.end_lat, formData.end_lon]);
+
+  const addStartMarkerToMap = (lat, lng) => {
+    const L = window.L;
+    if (!L || !mapInstanceRef.current) return;
+    
+    if (startMarkerRef.current) {
+      mapInstanceRef.current.removeLayer(startMarkerRef.current);
+    }
+    
+    const marker = L.marker([lat, lng], {
+      draggable: true,
+      icon: L.divIcon({
+        className: 'custom-marker',
+        html: '<div style="background: #3b82f6; width: 30px; height: 30px; border-radius: 50%; border: 3px solid white; display: flex; align-items: center; justify-content: center; font-size: 16px;">🔵</div>',
+        iconSize: [30, 30]
+      })
+    }).addTo(mapInstanceRef.current);
+    
+    marker.on('dragend', (e) => {
+      const pos = e.target.getLatLng();
+      setStartMarker(pos.lat, pos.lng);
+    });
+    
+    startMarkerRef.current = marker;
+    mapInstanceRef.current.setView([lat, lng], 12);
+  };
+
+  // Handle map clicks - upd// Handle map clicks - updates when mapMode changes
+useEffect(() => {
+  if (!mapInstanceRef.current) return;
+  
+  const map = mapInstanceRef.current;
+  const handleClick = (e) => {
+    if (mapMode === 'start') {
+      setStartMarker(e.latlng.lat, e.latlng.lng);
+      setMapMode('end'); // Auto-switch to end mode
+    } else if (mapMode === 'end') {
+      setEndMarker(e.latlng.lat, e.latlng.lng);
+    }
+  };
+  
+  map.off('click');
+  map.on('click', handleClick);
+  
+  return () => map.off('click', handleClick);
+}, [mapMode, showMap, formData.start_lat, formData.start_lon, formData.end_lat, formData.end_lon]);
+
+  const addEndMarkerToMap = (lat, lng) => {
+    const L = window.L;
+    if (!L || !mapInstanceRef.current) return;
+    
+    if (endMarkerRef.current) {
+      mapInstanceRef.current.removeLayer(endMarkerRef.current);
+    }
+    
+    const marker = L.marker([lat, lng], {
+      draggable: true,
+      icon: L.divIcon({
+        className: 'custom-marker',
+        html: '<div style="background: #ef4444; width: 30px; height: 30px; border-radius: 50%; border: 3px solid white; display: flex; align-items: center; justify-content: center; font-size: 16px;">🔴</div>',
+        iconSize: [30, 30]
+      })
+    }).addTo(mapInstanceRef.current);
+    
+    marker.on('dragend', (e) => {
+      const pos = e.target.getLatLng();
+      setEndMarker(pos.lat, pos.lng);
+    });
+    
+    endMarkerRef.current = marker;
+  };
+
+  const drawRouteLine = () => {
+    const L = window.L;
+    if (!L || !mapInstanceRef.current) return;
+    
+    if (routeLineRef.current) {
+      mapInstanceRef.current.removeLayer(routeLineRef.current);
+    }
+    
+    const line = L.polyline([
+      [formData.start_lat, formData.start_lon],
+      [formData.end_lat, formData.end_lon]
+    ], {
+      color: '#8b5cf6',
+      weight: 4,
+      opacity: 0.7,
+      dashArray: '10, 10'
+    }).addTo(mapInstanceRef.current);
+    
+    routeLineRef.current = line;
+    
+    // Fit bounds to show both markers
+    const bounds = L.latLngBounds(
+      [formData.start_lat, formData.start_lon],
+      [formData.end_lat, formData.end_lon]
+    );
+    mapInstanceRef.current.fitBounds(bounds, { padding: [50, 50] });
+  };
+
+  const setStartMarker = async (lat, lng) => {
+    setFormData(prev => ({
+      ...prev,
+      start_lat: lat,
+      start_lon: lng
+    }));
+    
+    addStartMarkerToMap(lat, lng);
+    
+    // Reverse geocode to get address
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+        { headers: { 'User-Agent': 'CarbonSense/1.0' } }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setFormData(prev => ({
+          ...prev,
+          start_location_name: data.display_name
+        }));
+        setLocationSearch(prev => ({
+          ...prev,
+          start: data.display_name
+        }));
+      }
+    } catch (err) {
+      console.error('Reverse geocoding failed:', err);
+    }
+    
+    if (formData.end_lat && formData.end_lon) {
+      calculateDistance(lat, lng, formData.end_lat, formData.end_lon);
+    }
+  };
+
+  const setEndMarker = async (lat, lng) => {
+    setFormData(prev => ({
+      ...prev,
+      end_lat: lat,
+      end_lon: lng
+    }));
+    
+    addEndMarkerToMap(lat, lng);
+    
+    // Reverse geocode to get address
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+        { headers: { 'User-Agent': 'CarbonSense/1.0' } }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setFormData(prev => ({
+          ...prev,
+          end_location_name: data.display_name
+        }));
+        setLocationSearch(prev => ({
+          ...prev,
+          end: data.display_name
+        }));
+      }
+    } catch (err) {
+      console.error('Reverse geocoding failed:', err);
+    }
+    
+    if (formData.start_lat && formData.start_lon) {
+      calculateDistance(formData.start_lat, formData.start_lon, lat, lng);
+    }
+  };
+
+  const openMapForLocation = (type) => {
+    setMapMode(type);
+    setShowMap(true);
+  };
+
+  const handleLocationSelect = (location, type) => {
+    const lat = parseFloat(location.lat);
+    const lon = parseFloat(location.lon);
+    const name = location.display_name;
+
+    if (type === 'start') {
+      setFormData(prev => ({
+        ...prev,
+        start_lat: lat,
+        start_lon: lon,
+        start_location_name: name
+      }));
+      setLocationSearch(prev => ({
+        ...prev,
+        start: name,
+        startSuggestions: []
+      }));
+      
+      if (showMap && mapInstanceRef.current) {
+        addStartMarkerToMap(lat, lon);
+      }
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        end_lat: lat,
+        end_lon: lon,
+        end_location_name: name
+      }));
+      setLocationSearch(prev => ({
+        ...prev,
+        end: name,
+        endSuggestions: []
+      }));
+      
+      if (showMap && mapInstanceRef.current) {
+        addEndMarkerToMap(lat, lon);
+      }
+    }
+
+    // Calculate distance if both points are set
+    if (type === 'start' && formData.end_lat && formData.end_lon) {
+      calculateDistance(lat, lon, formData.end_lat, formData.end_lon);
+    } else if (type === 'end' && formData.start_lat && formData.start_lon) {
+      calculateDistance(formData.start_lat, formData.start_lon, lat, lon);
+    }
+  };
+
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    // Haversine formula
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distance = R * c;
+
+    setFormData(prev => ({
+      ...prev,
+      distance_km: distance.toFixed(2)
+    }));
+  };
+
+  const clearLocation = (type) => {
+    if (type === 'start') {
+      setFormData(prev => ({
+        ...prev,
+        start_lat: null,
+        start_lon: null,
+        start_location_name: ''
+      }));
+      setLocationSearch(prev => ({
+        ...prev,
+        start: '',
+        startSuggestions: []
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        end_lat: null,
+        end_lon: null,
+        end_location_name: ''
+      }));
+      setLocationSearch(prev => ({
+        ...prev,
+        end: '',
+        endSuggestions: []
+      }));
+    }
+  };
+
   const modelColors = {
     linear: '#3b82f6',
     rf: '#10b981',
@@ -178,33 +584,167 @@ export default function CarbonSenseApp() {
           </div>
 
           {/* Conditional Input */}
-          <div className="mb-4">
-            {domain === 'transport' ? (
-              <>
-                <label className="block text-sm font-medium mb-2">Distance (km)</label>
-                <input
-                  type="number"
-                  value={formData.distance_km}
-                  onChange={e => setFormData({...formData, distance_km: e.target.value})}
-                  className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
-                  step="0.1"
-                  min="0"
-                />
-              </>
-            ) : (
-              <>
-                <label className="block text-sm font-medium mb-2">Energy (kWh)</label>
-                <input
-                  type="number"
-                  value={formData.kwh}
-                  onChange={e => setFormData({...formData, kwh: e.target.value})}
-                  className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
-                  step="0.1"
-                  min="0"
-                />
-              </>
-            )}
-          </div>
+          {domain === 'transport' ? (
+            <>
+              {/* Route Planner */}
+              <div className="mb-4 bg-gradient-to-r from-blue-900 to-purple-900 bg-opacity-30 rounded-xl p-4 border border-blue-700">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-blue-300 flex items-center gap-2">
+                    <MapPin className="w-4 h-4" />
+                    Route Planner
+                  </h3>
+                  <button
+                    onClick={() => openMapForLocation('start')}
+                    className="flex items-center gap-1 px-3 py-1 bg-blue-500 hover:bg-blue-600 rounded-lg text-xs font-semibold transition-all"
+                  >
+                    <MapIcon className="w-3 h-3" />
+                    Open Map
+                  </button>
+                </div>
+
+                {/* Start Location */}
+                <div className="mb-3 relative">
+                  <label className="block text-xs font-medium text-gray-400 mb-1">
+                    🔵 Start Point
+                  </label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search start location..."
+                      value={locationSearch.start}
+                      onChange={(e) => {
+                        setLocationSearch(prev => ({ ...prev, start: e.target.value }));
+                        debouncedSearch(e.target.value, 'start');
+                      }}
+                      className="w-full pl-10 pr-10 py-2 text-sm bg-gray-700 rounded-lg border border-gray-600 focus:border-blue-500 focus:outline-none"
+                    />
+                    {formData.start_lat && (
+                      <button
+                        onClick={() => clearLocation('start')}
+                        className="absolute right-3 top-2.5 text-gray-400 hover:text-white"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  
+                  {/* Start Suggestions */}
+                  {locationSearch.startSuggestions.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                      {locationSearch.startSuggestions.map((suggestion, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => handleLocationSelect(suggestion, 'start')}
+                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
+                        >
+                          <div className="text-sm text-white">{suggestion.display_name}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {formData.start_location_name && (
+                    <div className="mt-1 text-xs text-green-400 flex items-center gap-1">
+                      <MapPin className="w-3 h-3" />
+                      Selected: {formData.start_location_name.split(',')[0]}
+                    </div>
+                  )}
+                </div>
+
+                {/* End Location */}
+                <div className="mb-3 relative">
+                  <label className="block text-xs font-medium text-gray-400 mb-1">
+                    🔴 End Point
+                  </label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search end location..."
+                      value={locationSearch.end}
+                      onChange={(e) => {
+                        setLocationSearch(prev => ({ ...prev, end: e.target.value }));
+                        debouncedSearch(e.target.value, 'end');
+                      }}
+                      className="w-full pl-10 pr-10 py-2 text-sm bg-gray-700 rounded-lg border border-gray-600 focus:border-red-500 focus:outline-none"
+                    />
+                    {formData.end_lat && (
+                      <button
+                        onClick={() => clearLocation('end')}
+                        className="absolute right-3 top-2.5 text-gray-400 hover:text-white"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  
+                  {/* End Suggestions */}
+                  {locationSearch.endSuggestions.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                      {locationSearch.endSuggestions.map((suggestion, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => handleLocationSelect(suggestion, 'end')}
+                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
+                        >
+                          <div className="text-sm text-white">{suggestion.display_name}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {formData.end_location_name && (
+                    <div className="mt-1 text-xs text-green-400 flex items-center gap-1">
+                      <MapPin className="w-3 h-3" />
+                      Selected: {formData.end_location_name.split(',')[0]}
+                    </div>
+                  )}
+                </div>
+
+                {/* Distance Display */}
+                {formData.start_lat && formData.end_lat && (
+                  <div className="bg-green-500 bg-opacity-20 border border-green-500 rounded-lg p-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-green-300">Calculated Distance</div>
+                      <div className="text-2xl font-bold text-green-400">{formData.distance_km} km</div>
+                    </div>
+                    <Navigation className="w-8 h-8 text-green-400" />
+                  </div>
+                )}
+              </div>
+
+              {/* Manual Distance Override (Optional) */}
+              <details className="mb-4">
+                <summary className="text-xs text-gray-400 cursor-pointer hover:text-white mb-2">
+                  Or enter distance manually
+                </summary>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Distance (km)</label>
+                  <input
+                    type="number"
+                    value={formData.distance_km}
+                    onChange={e => setFormData({...formData, distance_km: e.target.value})}
+                    className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
+                    step="0.1"
+                    min="0"
+                  />
+                </div>
+              </details>
+            </>
+          ) : (
+            <div className="mb-4">
+              <label className="block text-sm font-medium mb-2">Energy (kWh)</label>
+              <input
+                type="number"
+                value={formData.kwh}
+                onChange={e => setFormData({...formData, kwh: e.target.value})}
+                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
+                step="0.1"
+                min="0"
+              />
+            </div>
+          )}
           
           {/* Location Selector */}
           <div className="mb-4">
@@ -1035,6 +1575,178 @@ export default function CarbonSenseApp() {
           <div className="text-2xl font-bold text-purple-400">✅ Production</div>
         </div>
       </div>
+
+      {/* Interactive Map Modal */}
+      {showMap && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75 p-4">
+          <div className="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-5xl h-[80vh] flex flex-col">
+            {/* Map Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-700">
+              <div>
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <MapIcon className="w-6 h-6 text-blue-400" />
+                  Interactive Route Map
+                </h3>
+                <p className="text-sm text-gray-400 mt-1">
+                  {mapMode === 'start' 
+                    ? '🔵 Click or drag the blue marker to set start point' 
+                    : mapMode === 'end'
+                    ? '🔴 Click or drag the red marker to set end point'
+                    : 'Click on the map to place markers or drag existing ones'}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowMap(false)}
+                className="w-10 h-10 bg-red-500 hover:bg-red-600 rounded-lg flex items-center justify-center transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Mode Selector & Location Search */}
+            <div className="p-4 bg-gray-700 space-y-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setMapMode('start')}
+                  className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-all ${
+                    mapMode === 'start'
+                      ? 'bg-blue-500 text-white shadow-lg'
+                      : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+                  }`}
+                >
+                  🔵 Set Start Point
+                </button>
+                <button
+                  onClick={() => setMapMode('end')}
+                  className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-all ${
+                    mapMode === 'end'
+                      ? 'bg-red-500 text-white shadow-lg'
+                      : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+                  }`}
+                >
+                  🔴 Set End Point
+                </button>
+              </div>
+
+              {/* Location Search in Modal */}
+              <div className="grid grid-cols-2 gap-3">
+                {/* Start Location Search */}
+                <div className="relative">
+                  <label className="block text-xs font-medium text-gray-400 mb-1">
+                    🔵 Search Start Location
+                  </label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search start..."
+                      value={locationSearch.start}
+                      onChange={(e) => {
+                        setLocationSearch(prev => ({ ...prev, start: e.target.value }));
+                        debouncedSearch(e.target.value, 'start');
+                      }}
+                      className="w-full pl-9 pr-3 py-2 text-sm bg-gray-600 rounded-lg border border-gray-500 focus:border-blue-500 focus:outline-none text-white"
+                    />
+                  </div>
+                  
+                  {locationSearch.startSuggestions.length > 0 && (
+                    <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                      {locationSearch.startSuggestions.map((suggestion, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => {
+                            handleLocationSelect(suggestion, 'start');
+                            setMapMode('end'); // Auto-switch to end point after selecting start
+                          }}
+                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
+                        >
+                          <div className="text-sm text-white">{suggestion.display_name}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* End Location Search */}
+                <div className="relative">
+                  <label className="block text-xs font-medium text-gray-400 mb-1">
+                    🔴 Search End Location
+                  </label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search end..."
+                      value={locationSearch.end}
+                      onChange={(e) => {
+                        setLocationSearch(prev => ({ ...prev, end: e.target.value }));
+                        debouncedSearch(e.target.value, 'end');
+                      }}
+                      className="w-full pl-9 pr-3 py-2 text-sm bg-gray-600 rounded-lg border border-gray-500 focus:border-red-500 focus:outline-none text-white"
+                    />
+                  </div>
+                  
+                  {locationSearch.endSuggestions.length > 0 && (
+                    <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                      {locationSearch.endSuggestions.map((suggestion, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => handleLocationSelect(suggestion, 'end')}
+                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
+                        >
+                          <div className="text-sm text-white">{suggestion.display_name}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Map Container */}
+            <div className="flex-1 relative">
+              <div ref={mapRef} className="w-full h-full"></div>
+            </div>
+
+            {/* Map Footer with Info */}
+            <div className="p-4 bg-gray-700 border-t border-gray-600">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <div className="text-gray-400 text-xs mb-1">🔵 Start Point</div>
+                  <div className="text-white font-medium">
+                    {formData.start_location_name 
+                      ? formData.start_location_name.split(',').slice(0, 2).join(',')
+                      : 'Not set - Click on map'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-400 text-xs mb-1">🔴 End Point</div>
+                  <div className="text-white font-medium">
+                    {formData.end_location_name 
+                      ? formData.end_location_name.split(',').slice(0, 2).join(',')
+                      : 'Not set - Click on map'}
+                  </div>
+                </div>
+              </div>
+              
+              {formData.start_lat && formData.end_lat && (
+                <div className="mt-3 bg-green-500 bg-opacity-20 border border-green-500 rounded-lg p-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-green-300">Route Distance</div>
+                    <div className="text-2xl font-bold text-green-400">{formData.distance_km} km</div>
+                  </div>
+                  <button
+                    onClick={() => setShowMap(false)}
+                    className="px-4 py-2 bg-green-500 hover:bg-green-600 rounded-lg font-semibold transition-all"
+                  >
+                    ✓ Confirm Route
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

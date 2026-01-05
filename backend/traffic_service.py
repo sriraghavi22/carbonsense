@@ -65,13 +65,15 @@ class TrafficService:
         self,
         start: Tuple[float, float],
         end: Tuple[float, float],
-        distance_km: float
+        distance_km: float,
     ) -> Dict:
-        """Get traffic from TomTom Routing API"""
+        """
+        TomTom traffic with congestion-length based emission adjustment
+        """
+
         try:
-            # Format: lat,lon:lat,lon
             route = f"{start[0]},{start[1]}:{end[0]},{end[1]}"
-            
+
             resp = requests.get(
                 f"https://api.tomtom.com/routing/1/calculateRoute/{route}/json",
                 params={
@@ -82,49 +84,77 @@ class TrafficService:
                 },
                 timeout=10
             )
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                
-                if "routes" in data and len(data["routes"]) > 0:
-                    route_data = data["routes"][0]["summary"]
-                    
-                    # Get travel times
-                    travel_time_traffic = route_data["travelTimeInSeconds"] / 60  # minutes
-                    travel_time_no_traffic = route_data.get("noTrafficTravelTimeInSeconds", travel_time_traffic) / 60
-                    
-                    # Calculate delay factor
-                    delay_factor = travel_time_traffic / travel_time_no_traffic if travel_time_no_traffic > 0 else 1.0
-                    delay_minutes = travel_time_traffic - travel_time_no_traffic
-                    
-                    # Calculate emissions multiplier
-                    # Research shows: stop-and-go traffic increases fuel consumption by 40-100%
-                    emission_multiplier = self._calculate_emission_multiplier(delay_factor)
-                    
-                    # Get actual distance from route
-                    actual_distance_km = route_data["lengthInMeters"] / 1000
-                    
-                    return {
-                        "success": True,
-                        "source": "TomTom Traffic API",
-                        "method": "real_time_api",
-                        "delay_factor": round(delay_factor, 2),
-                        "emission_multiplier": round(emission_multiplier, 2),
-                        "travel_time_minutes": round(travel_time_traffic, 1),
-                        "travel_time_no_traffic": round(travel_time_no_traffic, 1),
-                        "delay_minutes": round(delay_minutes, 1),
-                        "actual_distance_km": round(actual_distance_km, 2),
-                        "condition": self._get_traffic_condition(delay_factor),
-                        "message": self._get_traffic_message(delay_factor, emission_multiplier),
-                        "confidence": "high"
-                    }
-            
-            print(f"TomTom API error: Status {resp.status_code}")
-            
+
+            if resp.status_code != 200:
+                print(f"[TomTom] HTTP error {resp.status_code}")
+                return {"success": False}
+
+            data = resp.json()
+
+            if "routes" not in data or not data["routes"]:
+                print("[TomTom] No routes returned")
+                return {"success": False}
+
+            summary = data["routes"][0]["summary"]
+
+            travel_time_traffic_min = summary["travelTimeInSeconds"] / 60
+            traffic_delay_min = summary.get("trafficDelayInSeconds", 0) / 60
+            traffic_length_km = summary.get("trafficLengthInMeters", 0) / 1000
+
+            travel_time_no_traffic_min = max(
+                travel_time_traffic_min - traffic_delay_min,
+                0.1
+            )
+
+            delay_factor = travel_time_traffic_min / travel_time_no_traffic_min
+
+            actual_distance_km = summary.get(
+                "lengthInMeters",
+                distance_km * 1000
+            ) / 1000
+
+            traffic_ratio = (
+                traffic_length_km / actual_distance_km
+                if actual_distance_km > 0 else 0
+            )
+
+            emission_multiplier = self._calculate_emission_multiplier(delay_factor)
+
+            congestion_penalty = 0.0
+            if traffic_delay_min == 0:
+                if traffic_ratio > 0.5:
+                    congestion_penalty = 0.12
+                elif traffic_ratio > 0.3:
+                    congestion_penalty = 0.08
+                elif traffic_ratio > 0.1:
+                    congestion_penalty = 0.05
+
+                emission_multiplier += congestion_penalty
+
+            emission_multiplier = min(emission_multiplier, 2.0)
+
+            condition = self._get_traffic_condition(
+                max(delay_factor, 1 + congestion_penalty)
+            )
+
+            return {
+                "success": True,
+                "source": "TomTom Traffic API",
+                "method": "real_time_api",
+                "delay_factor": round(delay_factor, 2),
+                "emission_multiplier": round(emission_multiplier, 2),
+                "travel_time_minutes": round(travel_time_traffic_min, 1),
+                "travel_time_no_traffic": round(travel_time_no_traffic_min, 1),
+                "delay_minutes": round(traffic_delay_min, 1),
+                "actual_distance_km": round(actual_distance_km, 2),
+                "traffic_ratio": round(traffic_ratio, 2),
+                "condition": condition,
+                "confidence": "high" if traffic_delay_min > 0 or traffic_ratio > 0.3 else "medium"
+            }
+
         except Exception as e:
-            print(f"TomTom API exception: {e}")
-        
-        return {"success": False}
+            print(f"[TomTom] Exception: {e}")
+            return {"success": False}
     
     def _get_google_traffic(
         self,
