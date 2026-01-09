@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { Activity, Zap, AlertCircle, TrendingUp, Info, Cloud, Wind, Droplets, Sun, CloudRain, Lightbulb, BarChart3, Car, Navigation, Clock, Calendar, MapPin, Search, Map as MapIcon, X } from 'lucide-react';
+import { Activity, Zap, AlertCircle, TrendingUp, Info, Cloud, Wind, Droplets, Sun, CloudRain, Lightbulb, BarChart3, Car, Navigation, Clock, Calendar, MapPin, Search, Map as MapIcon, X, Leaf } from 'lucide-react';
 
-export default function CarbonSenseApp() {
+export default function App() {
   const [domain, setDomain] = useState('transport');
   const [formData, setFormData] = useState({
     distance_km: 5,
@@ -28,7 +28,7 @@ export default function CarbonSenseApp() {
     searchingEnd: false
   });
   const [showMap, setShowMap] = useState(false);
-  const [mapMode, setMapMode] = useState(null); // 'start' or 'end'
+  const [mapMode, setMapMode] = useState(null);
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const startMarkerRef = useRef(null);
@@ -72,10 +72,7 @@ export default function CarbonSenseApp() {
       
       const data = await response.json();
       console.log('✅ Received full response:', data);
-      console.log('📊 Grid context?', data.grid_context);
-      console.log('📈 Predictions?', data.predictions);
       
-      // Store the ENTIRE response, not just predictions
       setPredictions(data);
       
       setHistory(prev => [...prev, {
@@ -106,8 +103,6 @@ export default function CarbonSenseApp() {
         ...(domain === 'transport' ? { distance_km: parseFloat(formData.distance_km) } : { kwh: parseFloat(formData.kwh) })
       };
 
-      console.log('🔍 Requesting optimization:', payload);
-
       const response = await fetch('http://localhost:8000/optimize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -117,7 +112,6 @@ export default function CarbonSenseApp() {
       if (!response.ok) throw new Error('Optimization failed');
       
       const data = await response.json();
-      console.log('📊 Optimization data:', data);
       setOptimization(data.optimization);
       
     } catch (err) {
@@ -128,7 +122,6 @@ export default function CarbonSenseApp() {
     }
   };
 
-  // Location search with debouncing
   const searchLocation = async (query, type) => {
     if (!query || query.length < 3) {
       setLocationSearch(prev => ({
@@ -171,7 +164,6 @@ export default function CarbonSenseApp() {
     }
   };
 
-  // Debounce helper
   const debounce = (func, wait) => {
     let timeout;
     return (...args) => {
@@ -182,7 +174,6 @@ export default function CarbonSenseApp() {
 
   const debouncedSearch = debounce(searchLocation, 500);
 
-  // Initialize Leaflet map
   useEffect(() => {
     if (!document.getElementById('leaflet-css')) {
       const link = document.createElement('link');
@@ -193,62 +184,75 @@ export default function CarbonSenseApp() {
     }
 
     if (showMap && mapRef.current && !mapInstanceRef.current) {
-    // Dynamically load Leaflet
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-    script.async = true;
-    script.onload = () => {
-      const L = window.L;
-      
-      // Create map
-      const map = L.map(mapRef.current).setView([51.505, -0.09], 6);
-      
-      // Add tile layer
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors'
-      }).addTo(map);
-      
-      mapInstanceRef.current = map;
-      
-      // Set up click handler immediately after map creation
-      const handleClick = (e) => {
-        if (mapMode === 'start') {
-          setStartMarker(e.latlng.lat, e.latlng.lng);
-          setMapMode('end');
-        } else if (mapMode === 'end') {
-          setEndMarker(e.latlng.lat, e.latlng.lng);
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      script.async = true;
+      script.onload = () => {
+        const L = window.L;
+        
+        const map = L.map(mapRef.current).setView([51.505, -0.09], 6);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        
+        mapInstanceRef.current = map;
+        
+        const handleClick = (e) => {
+          if (mapMode === 'start') {
+            setStartMarker(e.latlng.lat, e.latlng.lng);
+            setMapMode('end');
+          } else if (mapMode === 'end') {
+            setEndMarker(e.latlng.lat, e.latlng.lng);
+          }
+        };
+        map.on('click', handleClick);
+        
+        if (formData.start_lat && formData.start_lon) {
+          addStartMarkerToMap(formData.start_lat, formData.start_lon);
+        }
+        if (formData.end_lat && formData.end_lon) {
+          addEndMarkerToMap(formData.end_lat, formData.end_lon);
         }
       };
-      map.on('click', handleClick);
-      
-      // Add existing markers if they exist
-      if (formData.start_lat && formData.start_lon) {
-        addStartMarkerToMap(formData.start_lat, formData.start_lon);
-      }
-      if (formData.end_lat && formData.end_lon) {
-        addEndMarkerToMap(formData.end_lat, formData.end_lon);
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      if (mapInstanceRef.current && !showMap) {
+        if (mapInstanceRef.current._customClickHandler) {
+          mapInstanceRef.current.off('click', mapInstanceRef.current._customClickHandler);
+        }
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
       }
     };
-    document.head.appendChild(script);
-  }
+  }, [showMap]);
 
-  return () => {
-    if (mapInstanceRef.current && !showMap) {
-      if (mapInstanceRef.current._customClickHandler) {
-        mapInstanceRef.current.off('click', mapInstanceRef.current._customClickHandler);
-      }
-      mapInstanceRef.current.remove();
-      mapInstanceRef.current = null;
-    }
-  };
-}, [showMap]);
-
-  // Update route line when markers change
   useEffect(() => {
     if (mapInstanceRef.current && formData.start_lat && formData.end_lat) {
       drawRouteLine();
     }
   }, [formData.start_lat, formData.start_lon, formData.end_lat, formData.end_lon]);
+
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+    
+    const map = mapInstanceRef.current;
+    const handleClick = (e) => {
+      if (mapMode === 'start') {
+        setStartMarker(e.latlng.lat, e.latlng.lng);
+        setMapMode('end'); 
+      } else if (mapMode === 'end') {
+        setEndMarker(e.latlng.lat, e.latlng.lng);
+      }
+    };
+    
+    map.off('click');
+    map.on('click', handleClick);
+    
+    return () => map.off('click', handleClick);
+  }, [mapMode, showMap, formData.start_lat, formData.start_lon, formData.end_lat, formData.end_lon]);
 
   const addStartMarkerToMap = (lat, lng) => {
     const L = window.L;
@@ -262,7 +266,7 @@ export default function CarbonSenseApp() {
       draggable: true,
       icon: L.divIcon({
         className: 'custom-marker',
-        html: '<div style="background: #3b82f6; width: 30px; height: 30px; border-radius: 50%; border: 3px solid white; display: flex; align-items: center; justify-content: center; font-size: 16px;">🔵</div>',
+        html: '<div style="background: #10b981; width: 30px; height: 30px; border-radius: 50%; border: 3px solid white; display: flex; align-items: center; justify-content: center; font-size: 16px;">🔵</div>',
         iconSize: [30, 30]
       })
     }).addTo(mapInstanceRef.current);
@@ -275,26 +279,6 @@ export default function CarbonSenseApp() {
     startMarkerRef.current = marker;
     mapInstanceRef.current.setView([lat, lng], 12);
   };
-
-  // Handle map clicks - upd// Handle map clicks - updates when mapMode changes
-useEffect(() => {
-  if (!mapInstanceRef.current) return;
-  
-  const map = mapInstanceRef.current;
-  const handleClick = (e) => {
-    if (mapMode === 'start') {
-      setStartMarker(e.latlng.lat, e.latlng.lng);
-      setMapMode('end'); // Auto-switch to end mode
-    } else if (mapMode === 'end') {
-      setEndMarker(e.latlng.lat, e.latlng.lng);
-    }
-  };
-  
-  map.off('click');
-  map.on('click', handleClick);
-  
-  return () => map.off('click', handleClick);
-}, [mapMode, showMap, formData.start_lat, formData.start_lon, formData.end_lat, formData.end_lon]);
 
   const addEndMarkerToMap = (lat, lng) => {
     const L = window.L;
@@ -333,7 +317,7 @@ useEffect(() => {
       [formData.start_lat, formData.start_lon],
       [formData.end_lat, formData.end_lon]
     ], {
-      color: '#8b5cf6',
+      color: '#10b981',
       weight: 4,
       opacity: 0.7,
       dashArray: '10, 10'
@@ -341,7 +325,6 @@ useEffect(() => {
     
     routeLineRef.current = line;
     
-    // Fit bounds to show both markers
     const bounds = L.latLngBounds(
       [formData.start_lat, formData.start_lon],
       [formData.end_lat, formData.end_lon]
@@ -358,7 +341,6 @@ useEffect(() => {
     
     addStartMarkerToMap(lat, lng);
     
-    // Reverse geocode to get address
     try {
       const response = await fetch(
         `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
@@ -393,7 +375,6 @@ useEffect(() => {
     
     addEndMarkerToMap(lat, lng);
     
-    // Reverse geocode to get address
     try {
       const response = await fetch(
         `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
@@ -463,7 +444,6 @@ useEffect(() => {
       }
     }
 
-    // Calculate distance if both points are set
     if (type === 'start' && formData.end_lat && formData.end_lon) {
       calculateDistance(lat, lon, formData.end_lat, formData.end_lon);
     } else if (type === 'end' && formData.start_lat && formData.start_lon) {
@@ -472,8 +452,7 @@ useEffect(() => {
   };
 
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    // Haversine formula
-    const R = 6371; // Earth's radius in km
+    const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
     const a = 
@@ -518,12 +497,12 @@ useEffect(() => {
   };
 
   const modelColors = {
-    linear: '#3b82f6',
-    rf: '#10b981',
-    xgb: '#f59e0b',
-    bayesian: '#8b5cf6',
-    context_aware: '#ec4899',
-    traffic_aware: '#f97316'
+    linear: '#10b981',
+    rf: '#34d399',
+    xgb: '#6ee7b7',
+    bayesian: '#059669',
+    context_aware: '#047857',
+    traffic_aware: '#065f46'
   };
 
   const modelComparisonData = predictions?.predictions ? Object.entries(predictions.predictions).map(([name, data]) => ({
@@ -539,464 +518,453 @@ useEffect(() => {
   ] : [];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-green-900 text-white p-8">
-      {/* Header */}
-      <div className="max-w-7xl mx-auto mb-8">
-        <div className="flex items-center gap-3 mb-2">
-          <div className="w-12 h-12 bg-green-500 rounded-lg flex items-center justify-center">
-            <Activity className="w-7 h-7" />
-          </div>
-          <div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent">
-              CarbonSense
-            </h1>
-            <p className="text-gray-400 text-sm">Context-Aware Carbon Tracking with ML Uncertainty</p>
+    <div className="min-h-screen bg-gray-50">
+      {/* Modern Header */}
+      <div className="bg-white border-b border-gray-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-8 py-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 bg-gradient-to-br from-green-400 to-emerald-500 rounded-xl flex items-center justify-center shadow-lg">
+                <Leaf className="w-8 h-8 text-white" />
+              </div>
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">
+                  CarbonSense
+                </h1>
+                <p className="text-sm text-gray-600">AI-Powered Carbon Tracking & Optimization</p>
+              </div>
+            </div>
+            {/* <div className="flex items-center gap-6 text-sm">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">18K+</div>
+                <div className="text-gray-600">Trips Analyzed</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">10</div>
+                <div className="text-gray-600">ML Models</div>
+              </div>
+            </div> */}
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Input Panel */}
-        <div className="lg:col-span-1 bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700 shadow-2xl">
-          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-            <Zap className="w-5 h-5 text-green-400" />
-            Input Parameters
-          </h2>
-
-          {/* Domain Toggle */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-2">Domain</label>
-            <div className="flex gap-2">
-              {['transport', 'energy'].map(d => (
-                <button
-                  key={d}
-                  onClick={() => setDomain(d)}
-                  className={`flex-1 py-3 rounded-lg font-medium transition-all ${
-                    domain === d 
-                      ? 'bg-green-500 text-white shadow-lg shadow-green-500/50' 
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  {d === 'transport' ? '🚗 Transport' : '⚡ Energy'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Conditional Input */}
-          {domain === 'transport' ? (
-            <>
-              {/* Route Planner */}
-              <div className="mb-4 bg-gradient-to-r from-blue-900 to-purple-900 bg-opacity-30 rounded-xl p-4 border border-blue-700">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-blue-300 flex items-center gap-2">
-                    <MapPin className="w-4 h-4" />
-                    Route Planner
-                  </h3>
-                  <button
-                    onClick={() => openMapForLocation('start')}
-                    className="flex items-center gap-1 px-3 py-1 bg-blue-500 hover:bg-blue-600 rounded-lg text-xs font-semibold transition-all"
-                  >
-                    <MapIcon className="w-3 h-3" />
-                    Open Map
-                  </button>
+      {/* Hero Section with Image */}
+      <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-b border-green-100">
+        <div className="max-w-7xl mx-auto px-8 py-12">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
+            <div>
+              <h2 className="text-4xl font-bold text-gray-900 mb-4">
+                Track Your Carbon Footprint with <span className="text-green-600">Precision</span>
+              </h2>
+              <p className="text-lg text-gray-700 mb-6">
+                Advanced machine learning models analyze your transport and energy usage, providing accurate carbon emission predictions with real-time context awareness.
+              </p>
+              <div className="flex gap-4">
+                <div className="flex items-center gap-2 text-gray-700">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span className="text-sm">Weather Impact</span>
                 </div>
-
-                {/* Start Location */}
-                <div className="mb-3 relative">
-                  <label className="block text-xs font-medium text-gray-400 mb-1">
-                    🔵 Start Point
-                  </label>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder="Search start location..."
-                      value={locationSearch.start}
-                      onChange={(e) => {
-                        setLocationSearch(prev => ({ ...prev, start: e.target.value }));
-                        debouncedSearch(e.target.value, 'start');
-                      }}
-                      className="w-full pl-10 pr-10 py-2 text-sm bg-gray-700 rounded-lg border border-gray-600 focus:border-blue-500 focus:outline-none"
-                    />
-                    {formData.start_lat && (
-                      <button
-                        onClick={() => clearLocation('start')}
-                        className="absolute right-3 top-2.5 text-gray-400 hover:text-white"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                  
-                  {/* Start Suggestions */}
-                  {locationSearch.startSuggestions.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-48 overflow-y-auto">
-                      {locationSearch.startSuggestions.map((suggestion, idx) => (
-                        <div
-                          key={idx}
-                          onClick={() => handleLocationSelect(suggestion, 'start')}
-                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
-                        >
-                          <div className="text-sm text-white">{suggestion.display_name}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  
-                  {formData.start_location_name && (
-                    <div className="mt-1 text-xs text-green-400 flex items-center gap-1">
-                      <MapPin className="w-3 h-3" />
-                      Selected: {formData.start_location_name.split(',')[0]}
-                    </div>
-                  )}
+                <div className="flex items-center gap-2 text-gray-700">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span className="text-sm">Traffic Analysis</span>
                 </div>
-
-                {/* End Location */}
-                <div className="mb-3 relative">
-                  <label className="block text-xs font-medium text-gray-400 mb-1">
-                    🔴 End Point
-                  </label>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder="Search end location..."
-                      value={locationSearch.end}
-                      onChange={(e) => {
-                        setLocationSearch(prev => ({ ...prev, end: e.target.value }));
-                        debouncedSearch(e.target.value, 'end');
-                      }}
-                      className="w-full pl-10 pr-10 py-2 text-sm bg-gray-700 rounded-lg border border-gray-600 focus:border-red-500 focus:outline-none"
-                    />
-                    {formData.end_lat && (
-                      <button
-                        onClick={() => clearLocation('end')}
-                        className="absolute right-3 top-2.5 text-gray-400 hover:text-white"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                  
-                  {/* End Suggestions */}
-                  {locationSearch.endSuggestions.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-48 overflow-y-auto">
-                      {locationSearch.endSuggestions.map((suggestion, idx) => (
-                        <div
-                          key={idx}
-                          onClick={() => handleLocationSelect(suggestion, 'end')}
-                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
-                        >
-                          <div className="text-sm text-white">{suggestion.display_name}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  
-                  {formData.end_location_name && (
-                    <div className="mt-1 text-xs text-green-400 flex items-center gap-1">
-                      <MapPin className="w-3 h-3" />
-                      Selected: {formData.end_location_name.split(',')[0]}
-                    </div>
-                  )}
+                <div className="flex items-center gap-2 text-gray-700">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span className="text-sm">24h Optimization</span>
                 </div>
-
-                {/* Distance Display */}
-                {formData.start_lat && formData.end_lat && (
-                  <div className="bg-green-500 bg-opacity-20 border border-green-500 rounded-lg p-3 flex items-center justify-between">
-                    <div>
-                      <div className="text-xs text-green-300">Calculated Distance</div>
-                      <div className="text-2xl font-bold text-green-400">{formData.distance_km} km</div>
-                    </div>
-                    <Navigation className="w-8 h-8 text-green-400" />
-                  </div>
-                )}
               </div>
-
-              {/* Manual Distance Override (Optional) */}
-              <details className="mb-4">
-                <summary className="text-xs text-gray-400 cursor-pointer hover:text-white mb-2">
-                  Or enter distance manually
-                </summary>
-                <div>
-                  <label className="block text-sm font-medium mb-2">Distance (km)</label>
-                  <input
-                    type="number"
-                    value={formData.distance_km}
-                    onChange={e => setFormData({...formData, distance_km: e.target.value})}
-                    className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
-                    step="0.1"
-                    min="0"
-                  />
-                </div>
-              </details>
-            </>
-          ) : (
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-2">Energy (kWh)</label>
-              <input
-                type="number"
-                value={formData.kwh}
-                onChange={e => setFormData({...formData, kwh: e.target.value})}
-                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
-                step="0.1"
-                min="0"
+            </div>
+            <div className="rounded-2xl overflow-hidden shadow-xl border-4 border-white">
+              <img 
+                src="https://images.unsplash.com/photo-1683632398898-81d7db605188" 
+                alt="Renewable Energy"
+                className="w-full h-80 object-cover"
               />
             </div>
-          )}
-          
-          {/* Location Selector */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium mb-2">📍 Location</label>
-            <select
-              value={formData.location}
-              onChange={e => setFormData({...formData, location: e.target.value})}
-              className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
-            >
-              <option value="UK">🇬🇧 United Kingdom (London)</option>
-              <option value="California">🇺🇸 California (San Francisco)</option>
-              <option value="India">🇮🇳 India (Hyderabad)</option>
-            </select>
           </div>
-          
-          {/* Vehicle Type Selector (Transport only) */}
-          {domain === 'transport' && (
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-8 py-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Input Sidebar */}
+        <div className="lg:col-span-1">
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6 sticky top-6" data-testid="input-parameters-card">
+            <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+              <Zap className="w-6 h-6 text-green-600" />
+              Input Parameters
+            </h2>
+
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-gray-700 mb-3">Domain</label>
+              <div className="flex gap-2">
+                {['transport', 'energy'].map(d => (
+                  <button
+                    key={d}
+                    data-testid={`domain-${d}-button`}
+                    onClick={() => setDomain(d)}
+                    className={`flex-1 py-3 rounded-xl font-semibold transition-all ${
+                      domain === d 
+                        ? 'bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg' 
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {d === 'transport' ? '🚗 Transport' : '⚡ Energy'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {domain === 'transport' ? (
+              <>
+                <div className="mb-6 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 border-2 border-green-200" data-testid="route-planner-section">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-bold text-green-800 flex items-center gap-2">
+                      <MapPin className="w-4 h-4" />
+                      Route Planner
+                    </h3>
+                    <button
+                      data-testid="open-map-button"
+                      onClick={() => openMapForLocation('start')}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-all shadow-md"
+                    >
+                      <MapIcon className="w-3 h-3" />
+                      Open Map
+                    </button>
+                  </div>
+
+                  <div className="mb-3 relative">
+                    <label className="block text-xs font-semibold text-gray-700 mb-2">
+                      🔵 Start Point
+                    </label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        data-testid="start-location-input"
+                        placeholder="Search start location..."
+                        value={locationSearch.start}
+                        onChange={(e) => {
+                          setLocationSearch(prev => ({ ...prev, start: e.target.value }));
+                          debouncedSearch(e.target.value, 'start');
+                        }}
+                        className="w-full pl-10 pr-10 py-2.5 text-sm bg-white rounded-lg border-2 border-gray-300 focus:border-green-500 focus:outline-none"
+                      />
+                      {formData.start_lat && (
+                        <button
+                          data-testid="clear-start-location-button"
+                          onClick={() => clearLocation('start')}
+                          className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    
+                    {locationSearch.startSuggestions.length > 0 && (
+                      <div className="absolute z-10 w-full mt-1 bg-white border-2 border-green-200 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                        {locationSearch.startSuggestions.map((suggestion, idx) => (
+                          <div
+                            key={idx}
+                            data-testid={`start-suggestion-${idx}`}
+                            onClick={() => handleLocationSelect(suggestion, 'start')}
+                            className="px-3 py-2 hover:bg-green-50 cursor-pointer border-b border-gray-100 last:border-0"
+                          >
+                            <div className="text-sm text-gray-900">{suggestion.display_name}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {formData.start_location_name && (
+                      <div className="mt-2 text-xs text-green-700 flex items-center gap-1 bg-green-50 px-2 py-1 rounded">
+                        <MapPin className="w-3 h-3" />
+                        Selected: {formData.start_location_name.split(',')[0]}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mb-3 relative">
+                    <label className="block text-xs font-semibold text-gray-700 mb-2">
+                      🔴 End Point
+                    </label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        data-testid="end-location-input"
+                        placeholder="Search end location..."
+                        value={locationSearch.end}
+                        onChange={(e) => {
+                          setLocationSearch(prev => ({ ...prev, end: e.target.value }));
+                          debouncedSearch(e.target.value, 'end');
+                        }}
+                        className="w-full pl-10 pr-10 py-2.5 text-sm bg-white rounded-lg border-2 border-gray-300 focus:border-red-500 focus:outline-none"
+                      />
+                      {formData.end_lat && (
+                        <button
+                          data-testid="clear-end-location-button"
+                          onClick={() => clearLocation('end')}
+                          className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    
+                    {locationSearch.endSuggestions.length > 0 && (
+                      <div className="absolute z-10 w-full mt-1 bg-white border-2 border-red-200 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                        {locationSearch.endSuggestions.map((suggestion, idx) => (
+                          <div
+                            key={idx}
+                            data-testid={`end-suggestion-${idx}`}
+                            onClick={() => handleLocationSelect(suggestion, 'end')}
+                            className="px-3 py-2 hover:bg-red-50 cursor-pointer border-b border-gray-100 last:border-0"
+                          >
+                            <div className="text-sm text-gray-900">{suggestion.display_name}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {formData.end_location_name && (
+                      <div className="mt-2 text-xs text-red-700 flex items-center gap-1 bg-red-50 px-2 py-1 rounded">
+                        <MapPin className="w-3 h-3" />
+                        Selected: {formData.end_location_name.split(',')[0]}
+                      </div>
+                    )}
+                  </div>
+
+                  {formData.start_lat && formData.end_lat && (
+                    <div className="bg-white border-2 border-green-400 rounded-xl p-4 flex items-center justify-between shadow-md" data-testid="calculated-distance-display">
+                      <div>
+                        <div className="text-xs text-green-700 font-semibold">Calculated Distance</div>
+                        <div className="text-3xl font-bold text-green-600">{formData.distance_km} km</div>
+                      </div>
+                      <Navigation className="w-10 h-10 text-green-500" />
+                    </div>
+                  )}
+                </div>
+
+                <details className="mb-4">
+                  <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-900 mb-2 font-medium">
+                    Or enter distance manually
+                  </summary>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Distance (km)</label>
+                    <input
+                      type="number"
+                      data-testid="distance-input"
+                      value={formData.distance_km}
+                      onChange={e => setFormData({...formData, distance_km: e.target.value})}
+                      className="w-full px-4 py-3 bg-white rounded-lg border-2 border-gray-300 focus:border-green-500 focus:outline-none"
+                      step="0.1"
+                      min="0"
+                    />
+                  </div>
+                </details>
+              </>
+            ) : (
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Energy (kWh)</label>
+                <input
+                  type="number"
+                  data-testid="energy-input"
+                  value={formData.kwh}
+                  onChange={e => setFormData({...formData, kwh: e.target.value})}
+                  className="w-full px-4 py-3 bg-white rounded-lg border-2 border-gray-300 focus:border-green-500 focus:outline-none"
+                  step="0.1"
+                  min="0"
+                />
+              </div>
+            )}
+            
             <div className="mb-4">
-              <label className="block text-sm font-medium mb-2">🚗 Vehicle Type</label>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">📍 Location</label>
               <select
-                value={formData.vehicle_type}
-                onChange={e => setFormData({...formData, vehicle_type: e.target.value})}
-                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
+                data-testid="location-select"
+                value={formData.location}
+                onChange={e => setFormData({...formData, location: e.target.value})}
+                className="w-full px-4 py-3 bg-white rounded-lg border-2 border-gray-300 focus:border-green-500 focus:outline-none"
               >
-                <option value="petrol_car">⛽ Petrol Car (0.17 kg/km)</option>
-                <option value="diesel_car">🛢️ Diesel Car (0.165 kg/km)</option>
-                <option value="hybrid">🔋 Hybrid (0.11 kg/km)</option>
-                <option value="electric">⚡ Electric (0.053 kg/km)</option>
-                <option value="motorcycle">🏍️ Motorcycle (0.113 kg/km)</option>
-                <option value="bus">🚌 Bus (0.089 kg/km)</option>
-                <option value="train">🚆 Train (0.041 kg/km)</option>
-                <option value="bicycle">🚴 Bicycle (0 kg/km)</option>
-                <option value="walking">🚶 Walking (0 kg/km)</option>
+                <option value="UK">🇬🇧 United Kingdom (London)</option>
+                <option value="California">🇺🇸 California (San Francisco)</option>
+                <option value="India">🇮🇳 India (Hyderabad)</option>
               </select>
             </div>
-          )}
-          
-          {/* Optional: Route Coordinates for Accurate Traffic */}
-          {domain === 'transport' && (
+            
+            {domain === 'transport' && (
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">🚗 Vehicle Type</label>
+                <select
+                  data-testid="vehicle-type-select"
+                  value={formData.vehicle_type}
+                  onChange={e => setFormData({...formData, vehicle_type: e.target.value})}
+                  className="w-full px-4 py-3 bg-white rounded-lg border-2 border-gray-300 focus:border-green-500 focus:outline-none"
+                >
+                  <option value="petrol_car">⛽ Petrol Car (0.17 kg/km)</option>
+                  <option value="diesel_car">🛢️ Diesel Car (0.165 kg/km)</option>
+                  <option value="hybrid">🔋 Hybrid (0.11 kg/km)</option>
+                  <option value="electric">⚡ Electric (0.053 kg/km)</option>
+                  <option value="motorcycle">🏍️ Motorcycle (0.113 kg/km)</option>
+                  <option value="bus">🚌 Bus (0.089 kg/km)</option>
+                  <option value="train">🚆 Train (0.041 kg/km)</option>
+                  <option value="bicycle">🚴 Bicycle (0 kg/km)</option>
+                  <option value="walking">🚶 Walking (0 kg/km)</option>
+                </select>
+              </div>
+            )}
+
             <div className="mb-4">
-              <details className="bg-gray-700 bg-opacity-30 rounded-lg p-3">
-                <summary className="text-sm font-medium cursor-pointer text-gray-300 hover:text-white">
-                  🗺️ Optional: Set Route Coordinates (Advanced)
-                </summary>
-                <div className="mt-3 space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-xs text-gray-400">Start Latitude</label>
-                      <input
-                        type="number"
-                        step="0.0001"
-                        placeholder="e.g., 51.5074"
-                        value={formData.start_lat || ''}
-                        onChange={e => setFormData({...formData, start_lat: e.target.value ? parseFloat(e.target.value) : null})}
-                        className="w-full px-2 py-2 text-sm bg-gray-600 rounded border border-gray-500 focus:border-green-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-400">Start Longitude</label>
-                      <input
-                        type="number"
-                        step="0.0001"
-                        placeholder="e.g., -0.1278"
-                        value={formData.start_lon || ''}
-                        onChange={e => setFormData({...formData, start_lon: e.target.value ? parseFloat(e.target.value) : null})}
-                        className="w-full px-2 py-2 text-sm bg-gray-600 rounded border border-gray-500 focus:border-green-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-xs text-gray-400">End Latitude</label>
-                      <input
-                        type="number"
-                        step="0.0001"
-                        placeholder="e.g., 51.5524"
-                        value={formData.end_lat || ''}
-                        onChange={e => setFormData({...formData, end_lat: e.target.value ? parseFloat(e.target.value) : null})}
-                        className="w-full px-2 py-2 text-sm bg-gray-600 rounded border border-gray-500 focus:border-green-500 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-400">End Longitude</label>
-                      <input
-                        type="number"
-                        step="0.0001"
-                        placeholder="e.g., -0.1278"
-                        value={formData.end_lon || ''}
-                        onChange={e => setFormData({...formData, end_lon: e.target.value ? parseFloat(e.target.value) : null})}
-                        className="w-full px-2 py-2 text-sm bg-gray-600 rounded border border-gray-500 focus:border-green-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-2">
-                    💡 Leave empty to use default city center. For accurate traffic, enter your actual route coordinates.
-                  </p>
-                </div>
-              </details>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Hour (0-23)</label>
+              <input
+                type="number"
+                data-testid="hour-input"
+                value={formData.hour}
+                onChange={e => setFormData({...formData, hour: e.target.value})}
+                className="w-full px-4 py-3 bg-white rounded-lg border-2 border-gray-300 focus:border-green-500 focus:outline-none"
+                min="0"
+                max="23"
+              />
             </div>
-          )}
 
-          {/* Temporal Features */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium mb-2">Hour (0-23)</label>
-            <input
-              type="number"
-              value={formData.hour}
-              onChange={e => setFormData({...formData, hour: e.target.value})}
-              className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
-              min="0"
-              max="23"
-            />
-          </div>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Day of Week (0=Mon, 6=Sun)</label>
+              <input
+                type="number"
+                data-testid="day-of-week-input"
+                value={formData.day_of_week}
+                onChange={e => setFormData({...formData, day_of_week: e.target.value})}
+                className="w-full px-4 py-3 bg-white rounded-lg border-2 border-gray-300 focus:border-green-500 focus:outline-none"
+                min="0"
+                max="6"
+              />
+            </div>
 
-          <div className="mb-4">
-            <label className="block text-sm font-medium mb-2">Day of Week (0=Mon, 6=Sun)</label>
-            <input
-              type="number"
-              value={formData.day_of_week}
-              onChange={e => setFormData({...formData, day_of_week: e.target.value})}
-              className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
-              min="0"
-              max="6"
-            />
-          </div>
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Weekend</label>
+              <select
+                data-testid="weekend-select"
+                value={formData.is_weekend}
+                onChange={e => setFormData({...formData, is_weekend: e.target.value})}
+                className="w-full px-4 py-3 bg-white rounded-lg border-2 border-gray-300 focus:border-green-500 focus:outline-none"
+              >
+                <option value="0">No</option>
+                <option value="1">Yes</option>
+              </select>
+            </div>
 
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-2">Weekend</label>
-            <select
-              value={formData.is_weekend}
-              onChange={e => setFormData({...formData, is_weekend: e.target.value})}
-              className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:border-green-500 focus:outline-none"
+            <button
+              data-testid="predict-button"
+              onClick={handlePredict}
+              disabled={loading}
+              className="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-bold text-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed mb-3"
             >
-              <option value="0">No</option>
-              <option value="1">Yes</option>
-            </select>
+              {loading ? 'Predicting...' : '🚀 Predict Emissions'}
+            </button>
+
+            <button
+              data-testid="optimize-button"
+              onClick={handleOptimize}
+              disabled={loadingOptimization}
+              className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl font-semibold hover:from-emerald-700 hover:to-teal-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loadingOptimization ? 'Optimizing...' : '⏰ Find Best Time (24h)'}
+            </button>
+
+            {error && (
+              <div className="mt-4 p-3 bg-red-50 border-2 border-red-300 rounded-lg flex items-start gap-2" data-testid="error-message">
+                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-red-700">{error}</p>
+              </div>
+            )}
           </div>
-
-          <button
-            onClick={handlePredict}
-            disabled={loading}
-            className="w-full py-4 bg-gradient-to-r from-green-500 to-blue-500 rounded-lg font-bold text-lg hover:from-green-600 hover:to-blue-600 transition-all shadow-lg shadow-green-500/30 disabled:opacity-50 disabled:cursor-not-allowed mb-3"
-          >
-            {loading ? 'Predicting...' : '🚀 Predict Emissions'}
-          </button>
-
-          <button
-            onClick={handleOptimize}
-            disabled={loadingOptimization}
-            className="w-full py-3 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg font-semibold hover:from-purple-600 hover:to-pink-600 transition-all shadow-lg shadow-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loadingOptimization ? 'Optimizing...' : '⏰ Find Best Time (24h)'}
-          </button>
-
-          {error && (
-            <div className="mt-4 p-3 bg-red-500 bg-opacity-20 border border-red-500 rounded-lg flex items-start gap-2">
-              <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-red-200">{error}</p>
-            </div>
-          )}
         </div>
 
-        {/* Results Panel */}
+        {/* Results Section */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Temporal Optimization Results */}
           {optimization && (
-            <div className="bg-gradient-to-r from-purple-900 to-pink-900 rounded-2xl p-6 shadow-2xl border-2 border-purple-500">
+            <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-2xl p-6 shadow-lg border-2 border-purple-200" data-testid="optimization-results-card">
               <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 bg-purple-500 rounded-lg flex items-center justify-center">
+                <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center shadow-md">
                   <Clock className="w-7 h-7 text-white" />
                 </div>
                 <div>
-                  <h3 className="text-2xl font-bold text-white">
-                    ⏰ Optimal Timing Analysis (Next 24h)
+                  <h3 className="text-2xl font-bold text-gray-900">
+                    ⏰ Optimal Timing Analysis
                   </h3>
-                  <div className="text-sm text-gray-300">
+                  <div className="text-sm text-gray-700">
                     {optimization.recommendation}
                   </div>
                 </div>
               </div>
 
-              {/* Current vs Optimal */}
               {optimization.current_time && (
                 <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div className="bg-gray-800 bg-opacity-40 rounded-lg p-4">
-                    <div className="text-sm text-gray-300 mb-1">Current Time</div>
-                    <div className="text-2xl font-bold text-yellow-400">
+                  <div className="bg-white rounded-xl p-4 border-2 border-yellow-200">
+                    <div className="text-sm text-gray-600 mb-1 font-semibold">Current Time</div>
+                    <div className="text-2xl font-bold text-yellow-600">
                       {optimization.current_time.time}
                     </div>
-                    <div className="text-sm text-gray-400">
+                    <div className="text-sm text-gray-600">
                       {optimization.current_time.estimated_emissions.toFixed(3)} kg CO₂
                     </div>
                   </div>
-                  <div className="bg-gray-800 bg-opacity-40 rounded-lg p-4">
-                    <div className="text-sm text-gray-300 mb-1">Optimal Time</div>
-                    <div className="text-2xl font-bold text-green-400">
+                  <div className="bg-white rounded-xl p-4 border-2 border-green-200">
+                    <div className="text-sm text-gray-600 mb-1 font-semibold">Optimal Time</div>
+                    <div className="text-2xl font-bold text-green-600">
                       {optimization.optimal_time.time}
                     </div>
-                    <div className="text-sm text-gray-400">
+                    <div className="text-sm text-gray-600">
                       {optimization.optimal_time.estimated_emissions.toFixed(3)} kg CO₂
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Potential Savings */}
               {optimization.potential_savings.percent > 0 && (
-                <div className="bg-green-500 bg-opacity-20 border border-green-400 rounded-lg p-4 mb-4">
-                  <div className="text-lg font-bold text-green-300">
+                <div className="bg-green-50 border-2 border-green-300 rounded-xl p-4 mb-4">
+                  <div className="text-lg font-bold text-green-700">
                     💰 Potential Savings: {optimization.potential_savings.percent}%
                   </div>
-                  <div className="text-sm text-gray-300">
+                  <div className="text-sm text-gray-700">
                     Save {optimization.potential_savings.absolute_kg.toFixed(3)} kg CO₂ by timing your activity optimally
                   </div>
                 </div>
               )}
 
-              {/* Insights */}
               {optimization.insights && optimization.insights.length > 0 && (
-                <div className="bg-purple-500 bg-opacity-20 border border-purple-400 rounded-lg p-4 mb-4">
-                  <h4 className="text-sm font-semibold text-purple-200 mb-2">💡 Key Insights:</h4>
+                <div className="bg-purple-50 border-2 border-purple-300 rounded-xl p-4 mb-4">
+                  <h4 className="text-sm font-bold text-purple-800 mb-2">💡 Key Insights:</h4>
                   <ul className="space-y-1">
                     {optimization.insights.map((insight, i) => (
-                      <li key={i} className="text-sm text-gray-300">{insight}</li>
+                      <li key={i} className="text-sm text-gray-700">{insight}</li>
                     ))}
                   </ul>
                 </div>
               )}
 
-              {/* Best Times */}
               <div className="mb-4">
-                <h4 className="text-sm font-semibold text-gray-200 mb-3 flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-green-400" />
+                <h4 className="text-sm font-bold text-gray-800 mb-3 flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-green-600" />
                   Top 5 Best Times
                 </h4>
                 <div className="space-y-2">
                   {optimization.best_times.map((time, idx) => (
-                    <div key={idx} className="bg-gray-800 bg-opacity-40 rounded-lg p-3 flex items-center justify-between">
+                    <div key={idx} className="bg-white rounded-xl p-3 flex items-center justify-between border-2 border-green-100 shadow-sm">
                       <div>
-                        <div className="font-semibold text-white flex items-center gap-2">
+                        <div className="font-semibold text-gray-900 flex items-center gap-2">
                           #{idx + 1} {time.time} ({time.day})
                           {time.confidence && (
-                            <span className={`text-xs px-2 py-0.5 rounded ${
-                              time.confidence === 'high' ? 'bg-green-500 bg-opacity-20 text-green-300' :
-                              time.confidence === 'medium' ? 'bg-yellow-500 bg-opacity-20 text-yellow-300' :
-                              'bg-gray-500 bg-opacity-20 text-gray-300'
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                              time.confidence === 'high' ? 'bg-green-100 text-green-700' :
+                              time.confidence === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                              'bg-gray-100 text-gray-700'
                             }`}>
-                              {time.confidence} confidence
+                              {time.confidence}
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-gray-400">
+                        <div className="text-xs text-gray-600">
                           {domain === 'energy' 
                             ? `Grid: ${time.grid_intensity?.toFixed(0)} gCO₂/kWh`
                             : `Traffic: ${time.traffic_factor}x multiplier`
@@ -1004,12 +972,12 @@ useEffect(() => {
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-lg font-bold text-green-400">
+                        <div className="text-lg font-bold text-green-600">
                           {time.estimated_emissions.toFixed(3)}
                         </div>
-                        <div className="text-xs text-gray-400">kg CO₂</div>
+                        <div className="text-xs text-gray-600">kg CO₂</div>
                         {time.savings_percent > 0 && (
-                          <div className="text-xs text-green-400">-{time.savings_percent}%</div>
+                          <div className="text-xs text-green-600 font-semibold">-{time.savings_percent}%</div>
                         )}
                       </div>
                     </div>
@@ -1017,20 +985,19 @@ useEffect(() => {
                 </div>
               </div>
 
-              {/* Worst Times */}
               <div>
-                <h4 className="text-sm font-semibold text-gray-200 mb-3 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-red-400" />
+                <h4 className="text-sm font-bold text-gray-800 mb-3 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600" />
                   Times to Avoid
                 </h4>
                 <div className="space-y-2">
                   {optimization.worst_times.map((time, idx) => (
-                    <div key={idx} className="bg-red-900 bg-opacity-30 border border-red-700 rounded-lg p-3 flex items-center justify-between">
+                    <div key={idx} className="bg-red-50 border-2 border-red-200 rounded-xl p-3 flex items-center justify-between">
                       <div>
-                        <div className="font-semibold text-white">
+                        <div className="font-semibold text-gray-900">
                           {time.time} ({time.day})
                         </div>
-                        <div className="text-xs text-gray-400">
+                        <div className="text-xs text-gray-600">
                           {domain === 'energy' 
                             ? `Grid: ${time.grid_intensity?.toFixed(0)} gCO₂/kWh`
                             : `Traffic: ${time.traffic_factor}x multiplier`
@@ -1038,73 +1005,40 @@ useEffect(() => {
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-lg font-bold text-red-400">
+                        <div className="text-lg font-bold text-red-600">
                           {time.estimated_emissions.toFixed(3)}
                         </div>
-                        <div className="text-xs text-gray-400">kg CO₂</div>
+                        <div className="text-xs text-gray-600">kg CO₂</div>
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-              {/* Methodology & Confidence */}
-              {optimization.methodology && (
-                <div className="mt-4 bg-gray-800 bg-opacity-40 border border-gray-600 rounded-lg p-4">
-                  <details>
-                    <summary className="text-sm font-semibold text-gray-300 cursor-pointer hover:text-white">
-                      📊 Forecast Methodology & Confidence
-                    </summary>
-                    <div className="mt-3 space-y-2 text-xs text-gray-400">
-                      <div>
-                        <span className="font-semibold text-gray-300">Type:</span> {optimization.methodology.type}
-                      </div>
-                      <div>
-                        <span className="font-semibold text-gray-300">Description:</span> {optimization.methodology.description}
-                      </div>
-                      <div>
-                        <span className="font-semibold text-gray-300">Data Sources:</span>
-                        <ul className="ml-4 mt-1">
-                          {Object.entries(optimization.methodology.data_sources).map(([key, value]) => (
-                            <li key={key}>• {key}: {value}</li>
-                          ))}
-                        </ul>
-                      </div>
-                      <div className="text-yellow-400 mt-2">
-                        ⚠️ {optimization.methodology.limitations}
-                      </div>
-                    </div>
-                  </details>
-                </div>
-              )}
             </div>
           )}
 
-          {/* Combined Context Score Card */}
           {predictions?.context_score && (
-            <div className={`bg-gradient-to-r ${
-              predictions.context_score.rating_color === 'green' ? 'from-green-900 to-emerald-900 border-green-500' :
-              predictions.context_score.rating_color === 'lime' ? 'from-lime-900 to-green-900 border-lime-500' :
-              predictions.context_score.rating_color === 'yellow' ? 'from-yellow-900 to-amber-900 border-yellow-500' :
-              predictions.context_score.rating_color === 'orange' ? 'from-orange-900 to-red-900 border-orange-500' :
-              'from-red-900 to-pink-900 border-red-500'
-            } rounded-2xl p-6 shadow-2xl border-2`}>
+            <div className={`rounded-2xl p-6 shadow-lg border-2 ${
+              predictions.context_score.rating_color === 'green' ? 'bg-green-50 border-green-300' :
+              predictions.context_score.rating_color === 'lime' ? 'bg-lime-50 border-lime-300' :
+              predictions.context_score.rating_color === 'yellow' ? 'bg-yellow-50 border-yellow-300' :
+              predictions.context_score.rating_color === 'orange' ? 'bg-orange-50 border-orange-300' :
+              'bg-red-50 border-red-300'
+            }`} data-testid="context-score-card">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="text-3xl font-bold text-white mb-1">
+                  <h3 className="text-3xl font-bold text-gray-900 mb-1">
                     {predictions.context_score.rating_emoji} Context Score: {predictions.context_score.score}/100
                   </h3>
-                  <div className="text-xl font-semibold text-gray-200">
+                  <div className="text-xl font-semibold text-gray-700">
                     {predictions.context_score.rating}
                   </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-6xl">{predictions.context_score.rating_emoji}</div>
-                </div>
+                <div className="text-5xl">{predictions.context_score.rating_emoji}</div>
               </div>
               
-              {/* Score Bar */}
               <div className="mb-4">
-                <div className="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
+                <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
                   <div
                     className={`h-4 rounded-full transition-all duration-500 ${
                       predictions.context_score.rating_color === 'green' ? 'bg-green-500' :
@@ -1116,61 +1050,44 @@ useEffect(() => {
                     style={{ width: `${predictions.context_score.score}%` }}
                   />
                 </div>
-                <div className="flex justify-between text-xs text-gray-400 mt-1">
+                <div className="flex justify-between text-xs text-gray-600 mt-1 font-medium">
                   <span>0 (Worst)</span>
                   <span>50 (Average)</span>
                   <span>100 (Best)</span>
                 </div>
               </div>
               
-              {/* Message */}
-              <div className="bg-white bg-opacity-10 rounded-lg p-3 mb-4">
-                <p className="text-sm text-white font-medium">
+              <div className="bg-white rounded-xl p-4 mb-4 border-2 border-gray-200">
+                <p className="text-sm text-gray-800 font-medium">
                   {predictions.context_score.message}
                 </p>
               </div>
               
-              {/* Contributing Factors */}
               {predictions.context_score.factors.length > 0 && (
-                <div className="bg-gray-800 bg-opacity-40 rounded-lg p-4">
-                  <h4 className="text-sm font-semibold text-gray-200 mb-2">Contributing Factors:</h4>
+                <div className="bg-white rounded-xl p-4 border-2 border-gray-200">
+                  <h4 className="text-sm font-bold text-gray-800 mb-2">Contributing Factors:</h4>
                   <ul className="space-y-1">
                     {predictions.context_score.factors.map((factor, i) => (
-                      <li key={i} className="text-xs text-gray-300">{factor}</li>
+                      <li key={i} className="text-xs text-gray-700">{factor}</li>
                     ))}
                   </ul>
-                </div>
-              )}
-              
-              {/* Breakdown */}
-              {predictions.context_score.breakdown && (
-                <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                  {Object.entries(predictions.context_score.breakdown).map(([key, value]) => 
-                    value !== null && (
-                      <div key={key} className="bg-gray-800 bg-opacity-40 rounded px-2 py-1">
-                        <span className="text-gray-400 capitalize">{key}:</span>
-                        <span className="text-white font-semibold ml-1">{value}</span>
-                      </div>
-                    )
-                  )}
                 </div>
               )}
             </div>
           )}
           
-          {/* Traffic Context Card (for Transport) */}
           {predictions?.traffic_context && predictions.traffic_context.success && (
-            <div className="bg-gradient-to-r from-orange-900 to-red-900 rounded-2xl p-6 shadow-2xl border-2 border-orange-500">
+            <div className="bg-gradient-to-br from-orange-50 to-red-50 rounded-2xl p-6 shadow-lg border-2 border-orange-200" data-testid="traffic-context-card">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-orange-500 rounded-lg flex items-center justify-center">
+                  <div className="w-12 h-12 bg-gradient-to-br from-orange-500 to-red-500 rounded-xl flex items-center justify-center shadow-md">
                     <Car className="w-7 h-7 text-white" />
                   </div>
                   <div>
-                    <h3 className="text-2xl font-bold text-white">
+                    <h3 className="text-2xl font-bold text-gray-900">
                       Traffic Impact: {predictions.traffic_context.condition}
                     </h3>
-                    <div className="text-sm text-gray-300">
+                    <div className="text-sm text-gray-600">
                       {predictions.traffic_context.source}
                     </div>
                   </div>
@@ -1182,76 +1099,70 @@ useEffect(() => {
                 </div>
               </div>
               
-              <div className="grid grid-cols-3 gap-4 bg-gray-800 bg-opacity-40 rounded-xl p-4">
+              <div className="grid grid-cols-3 gap-4 bg-white rounded-xl p-4 border-2 border-gray-200">
                 <div>
-                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                  <div className="text-sm text-gray-600 flex items-center gap-1 font-semibold">
                     <Navigation className="w-4 h-4" />
                     Delay Factor
                   </div>
-                  <div className="text-3xl font-bold text-orange-400">
+                  <div className="text-3xl font-bold text-orange-600">
                     {predictions.traffic_context.delay_factor}x
                   </div>
-                  <div className="text-xs text-gray-400">
+                  <div className="text-xs text-gray-600">
                     +{predictions.traffic_context.delay_minutes.toFixed(0)} min delay
                   </div>
                 </div>
                 <div>
-                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                  <div className="text-sm text-gray-600 flex items-center gap-1 font-semibold">
                     <AlertCircle className="w-4 h-4" />
                     Emission Impact
                   </div>
-                  <div className="text-3xl font-bold text-red-400">
+                  <div className="text-3xl font-bold text-red-600">
                     +{((predictions.traffic_context.emission_multiplier - 1) * 100).toFixed(0)}%
                   </div>
-                  <div className="text-xs text-gray-400">
+                  <div className="text-xs text-gray-600">
                     {predictions.traffic_context.emission_multiplier}x multiplier
                   </div>
                 </div>
                 <div>
-                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                  <div className="text-sm text-gray-600 flex items-center gap-1 font-semibold">
                     <TrendingUp className="w-4 h-4" />
                     Travel Time
                   </div>
-                  <div className="text-3xl font-bold text-yellow-400">
+                  <div className="text-3xl font-bold text-yellow-600">
                     {predictions.traffic_context.travel_time_minutes.toFixed(0)}
                   </div>
-                  <div className="text-xs text-gray-400">
+                  <div className="text-xs text-gray-600">
                     vs {predictions.traffic_context.travel_time_no_traffic.toFixed(0)} min normal
                   </div>
                 </div>
               </div>
               
-              <div className="mt-4 p-3 bg-orange-500 bg-opacity-20 rounded-lg border border-orange-400">
-                <div className="text-sm text-orange-100">
+              <div className="mt-4 p-3 bg-orange-100 border-2 border-orange-300 rounded-xl">
+                <div className="text-sm text-gray-800 font-medium">
                   {predictions.traffic_context.message}
                 </div>
                 {predictions.traffic_context.note && (
-                  <div className="text-xs text-gray-300 mt-2">
+                  <div className="text-xs text-gray-700 mt-2">
                     ℹ️ {predictions.traffic_context.note}
                   </div>
                 )}
               </div>
-              
-              <div className="mt-3 text-xs text-gray-400">
-                Confidence: {predictions.traffic_context.confidence} • 
-                Method: {predictions.traffic_context.method}
-              </div>
             </div>
           )}
           
-          {/* Weather Context Card */}
           {predictions?.weather_context && predictions.weather_context.success && (
-            <div className="bg-gradient-to-r from-blue-900 to-cyan-900 rounded-2xl p-6 shadow-2xl border-2 border-blue-500">
+            <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-2xl p-6 shadow-lg border-2 border-blue-200" data-testid="weather-context-card">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-blue-500 rounded-lg flex items-center justify-center">
+                  <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center shadow-md">
                     <Cloud className="w-7 h-7 text-white" />
                   </div>
                   <div>
-                    <h3 className="text-2xl font-bold text-white">
+                    <h3 className="text-2xl font-bold text-gray-900">
                       Weather Impact: {predictions.weather_context.location}
                     </h3>
-                    <div className="text-sm text-gray-300">
+                    <div className="text-sm text-gray-600">
                       {predictions.weather_context.description}
                     </div>
                   </div>
@@ -1264,205 +1175,189 @@ useEffect(() => {
                 </div>
               </div>
               
-              <div className="grid grid-cols-3 gap-4 bg-gray-800 bg-opacity-40 rounded-xl p-4">
+              <div className="grid grid-cols-3 gap-4 bg-white rounded-xl p-4 border-2 border-gray-200">
                 <div>
-                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                  <div className="text-sm text-gray-600 flex items-center gap-1 font-semibold">
                     <Sun className="w-4 h-4" />
                     Temperature
                   </div>
-                  <div className="text-3xl font-bold text-white">
+                  <div className="text-3xl font-bold text-gray-900">
                     {predictions.weather_context.temperature}°C
                   </div>
-                  <div className="text-xs text-gray-400">
+                  <div className="text-xs text-gray-600">
                     Feels like {predictions.weather_context.feels_like}°C
                   </div>
                 </div>
                 <div>
-                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                  <div className="text-sm text-gray-600 flex items-center gap-1 font-semibold">
                     <Wind className="w-4 h-4" />
                     Wind Speed
                   </div>
-                  <div className="text-3xl font-bold text-cyan-400">
+                  <div className="text-3xl font-bold text-cyan-600">
                     {predictions.weather_context.wind_speed}
                   </div>
-                  <div className="text-xs text-gray-400">m/s</div>
+                  <div className="text-xs text-gray-600">m/s</div>
                 </div>
                 <div>
-                  <div className="text-sm text-gray-300 flex items-center gap-1">
+                  <div className="text-sm text-gray-600 flex items-center gap-1 font-semibold">
                     <Droplets className="w-4 h-4" />
                     Humidity
                   </div>
-                  <div className="text-3xl font-bold text-blue-400">
+                  <div className="text-3xl font-bold text-blue-600">
                     {predictions.weather_context.humidity}%
                   </div>
-                  <div className="text-xs text-gray-400">
+                  <div className="text-xs text-gray-600">
                     {predictions.weather_context.clouds}% clouds
                   </div>
                 </div>
               </div>
               
-              <div className="mt-4 p-3 bg-blue-500 bg-opacity-20 rounded-lg border border-blue-400">
-                <div className="text-sm font-semibold text-blue-200 mb-2">
+              <div className="mt-4 p-4 bg-blue-100 border-2 border-blue-300 rounded-xl">
+                <div className="text-sm font-bold text-blue-800 mb-2">
                   {domain === 'energy' ? '⚡ Grid Impact' : '🚗 Fuel Efficiency Impact'}
                 </div>
                 {domain === 'energy' ? (
                   <>
-                    <div className="text-sm text-gray-300">
+                    <div className="text-sm text-gray-800">
                       Carbon Impact: {predictions.weather_context.impact.score > 0 ? '📈' : '📉'} 
                       {Math.abs(predictions.weather_context.impact.score)}% {predictions.weather_context.impact.score > 0 ? 'increase' : 'decrease'}
                     </div>
-                    <div className="text-xs text-gray-300 mt-1">{predictions.weather_context.impact.message}</div>
-                    {predictions.weather_context.impact.factors.length > 0 && (
-                      <ul className="mt-2 space-y-1">
-                        {predictions.weather_context.impact.factors.map((factor, i) => (
-                          <li key={i} className="text-xs text-gray-300">• {factor}</li>
-                        ))}
-                      </ul>
-                    )}
+                    <div className="text-xs text-gray-700 mt-1">{predictions.weather_context.impact.message}</div>
                   </>
                 ) : (
-                  <>
-                    <div className="text-sm text-gray-300">
-                      {predictions.predictions?.context_aware?.adjustments?.weather_multiplier && (
-                        <>
-                          Fuel consumption: {((predictions.predictions.context_aware.adjustments.weather_multiplier - 1) * 100).toFixed(0) > 0 ? '+' : ''}
-                          {((predictions.predictions.context_aware.adjustments.weather_multiplier - 1) * 100).toFixed(0)}% 
-                          {predictions.weather_context.temperature < 10 ? ' (cold engine warmup)' : 
-                           predictions.weather_context.temperature > 28 ? ' (AC usage)' : 
-                           predictions.weather_context.condition === 'Rain' ? ' (wet roads)' : ''}
-                        </>
-                      )}
-                    </div>
-                  </>
+                  <div className="text-sm text-gray-800">
+                    {predictions.predictions?.context_aware?.adjustments?.weather_multiplier && (
+                      <>
+                        Fuel consumption: {((predictions.predictions.context_aware.adjustments.weather_multiplier - 1) * 100).toFixed(0) > 0 ? '+' : ''}
+                        {((predictions.predictions.context_aware.adjustments.weather_multiplier - 1) * 100).toFixed(0)}% 
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
           )}
           
-          {/* Live Grid Card - PROMINENT */}
           {predictions?.grid_context && (
-            <div className="bg-gradient-to-r from-gray-800 to-gray-900 rounded-2xl p-6 shadow-2xl border-2 border-green-500">
+            <div className="bg-white rounded-2xl p-6 shadow-lg border-2 border-green-200" data-testid="grid-context-card">
               <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 bg-green-500 rounded-lg flex items-center justify-center">
+                <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-500 rounded-xl flex items-center justify-center shadow-md">
                   <Zap className="w-7 h-7 text-white" />
                 </div>
                 <div>
-                  <h3 className="text-2xl font-bold text-white">
+                  <h3 className="text-2xl font-bold text-gray-900">
                     Live Grid: {predictions.grid_context.location}
                   </h3>
-                  <div className="text-sm text-gray-400">
+                  <div className="text-sm text-gray-600">
                     {predictions.grid_context.source}
                   </div>
                 </div>
               </div>
               
-              <div className="grid grid-cols-2 gap-4 bg-gray-700 bg-opacity-50 rounded-xl p-4">
+              <div className="grid grid-cols-2 gap-4 bg-green-50 rounded-xl p-4 border-2 border-green-200">
                 <div>
-                  <div className="text-sm text-gray-300">Current Intensity</div>
-                  <div className="text-4xl font-bold text-green-400">
+                  <div className="text-sm text-gray-700 font-semibold">Current Intensity</div>
+                  <div className="text-4xl font-bold text-green-600">
                     {predictions.grid_context.intensity_gco2_kwh.toFixed(0)}
                   </div>
-                  <div className="text-xs text-gray-400">gCO₂/kWh</div>
+                  <div className="text-xs text-gray-600">gCO₂/kWh</div>
                 </div>
                 <div>
-                  <div className="text-sm text-gray-300">vs. Average</div>
-                  <div className={`text-3xl font-bold ${predictions.grid_context.comparison?.difference_percent < 0 ? 'text-green-400' : 'text-orange-400'}`}>
+                  <div className="text-sm text-gray-700 font-semibold">vs. Average</div>
+                  <div className={`text-3xl font-bold ${predictions.grid_context.comparison?.difference_percent < 0 ? 'text-green-600' : 'text-orange-600'}`}>
                     {predictions.grid_context.comparison?.difference_percent > 0 ? '+' : ''}
                     {predictions.grid_context.comparison?.difference_percent.toFixed(0)}%
                   </div>
-                  <div className="text-xs text-gray-300 mt-1">
+                  <div className="text-xs text-gray-700 mt-1">
                     {predictions.grid_context.comparison?.message}
                   </div>
                 </div>
               </div>
               
-              <div className="mt-4 text-xs text-gray-400 flex items-center gap-2">
+              <div className="mt-4 text-xs text-gray-600 flex items-center gap-2">
                 <Info className="w-4 h-4" />
                 Updated: {new Date(predictions.grid_context.timestamp).toLocaleString()}
               </div>
             </div>
           )}
 
-          {/* Model Comparison */}
           {predictions?.predictions && (
-            <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700 shadow-2xl">
-              <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-blue-400" />
+            <div className="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-200" data-testid="model-predictions-card">
+              <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <TrendingUp className="w-6 h-6 text-green-600" />
                 Model Predictions Comparison
               </h3>
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={modelComparisonData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                   <XAxis 
                     dataKey="name" 
-                    stroke="#9ca3af"
+                    stroke="#6b7280"
                     style={{ fontSize: '12px', fontWeight: '600' }}
                   />
                   <YAxis 
-                    stroke="#9ca3af" 
-                    label={{ value: 'CO₂ (kg)', angle: -90, position: 'insideLeft', style: { fill: '#9ca3af' } }}
+                    stroke="#6b7280" 
+                    label={{ value: 'CO₂ (kg)', angle: -90, position: 'insideLeft', style: { fill: '#6b7280' } }}
                     style={{ fontSize: '12px' }}
                   />
                   <Tooltip 
-                    contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '8px' }}
-                    labelStyle={{ color: '#fff' }}
-                    itemStyle={{ color: '#fff' }}
+                    contentStyle={{ backgroundColor: '#ffffff', border: '2px solid #e5e7eb', borderRadius: '12px' }}
+                    labelStyle={{ color: '#111827', fontWeight: 'bold' }}
+                    itemStyle={{ color: '#374151' }}
                   />
-                  <Bar dataKey="value" radius={[8, 8, 0, 0]} label={{ position: 'top', fill: '#fff', fontSize: 12, formatter: (value) => value.toFixed(2) }}>
+                  <Bar dataKey="value" radius={[8, 8, 0, 0]} label={{ position: 'top', fill: '#111827', fontSize: 12, fontWeight: 'bold', formatter: (value) => value.toFixed(2) }}>
                     {modelComparisonData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              <div className="grid grid-cols-5 gap-3 mt-4">
+              <div className="grid grid-cols-3 lg:grid-cols-6 gap-3 mt-4">
                 {Object.entries(predictions.predictions).map(([name, data]) => (
-                  <div key={name} className="bg-gray-700 rounded-lg p-3 border border-gray-600">
-                    <div className="text-xs text-gray-300 uppercase font-semibold">{name}</div>
-                    <div className="text-xl font-bold mt-1" style={{ color: modelColors[name] || '#a855f7' }}>
+                  <div key={name} className="bg-green-50 rounded-xl p-3 border-2 border-green-200">
+                    <div className="text-xs text-gray-700 uppercase font-bold">{name}</div>
+                    <div className="text-xl font-bold mt-1" style={{ color: modelColors[name] || '#059669' }}>
                       {(data.mean || 0).toFixed(3)}
                     </div>
-                    <div className="text-xs text-gray-400">kg CO₂</div>
+                    <div className="text-xs text-gray-600">kg CO₂</div>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Uncertainty Visualization */}
           {predictions?.predictions?.bayesian && (
-            <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700 shadow-2xl">
-              <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                <Info className="w-5 h-5 text-purple-400" />
+            <div className="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-200" data-testid="bayesian-uncertainty-card">
+              <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Info className="w-6 h-6 text-purple-600" />
                 Bayesian Uncertainty (95% CI)
               </h3>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={uncertaintyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="label" stroke="#9ca3af" />
-                  <YAxis stroke="#9ca3af" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="label" stroke="#6b7280" />
+                  <YAxis stroke="#6b7280" />
                   <Tooltip 
-                    contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '8px' }}
+                    contentStyle={{ backgroundColor: '#ffffff', border: '2px solid #e5e7eb', borderRadius: '12px' }}
                   />
                   <Bar dataKey="value" fill="#8b5cf6" radius={[8, 8, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-              <div className="mt-4 p-4 bg-purple-500 bg-opacity-10 border border-purple-500 rounded-lg">
-                <p className="text-sm text-purple-200">
+              <div className="mt-4 p-4 bg-purple-50 border-2 border-purple-200 rounded-xl">
+                <p className="text-sm text-gray-800 font-semibold">
                   <strong>Confidence Interval:</strong> [{predictions.predictions.bayesian.ci_lower.toFixed(2)}, {predictions.predictions.bayesian.ci_upper.toFixed(2)}] kg CO₂
                 </p>
-                <p className="text-xs text-gray-400 mt-1">
+                <p className="text-xs text-gray-600 mt-1">
                   Standard Deviation: {predictions.predictions.bayesian.std.toFixed(2)} kg
                 </p>
               </div>
             </div>
           )}
 
-          {/* SHAP Explainability Section */}
           {predictions?.explainability && Object.keys(predictions.explainability).length > 0 && (
-            <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700 shadow-2xl">
-              <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                <Lightbulb className="w-5 h-5 text-yellow-400" />
+            <div className="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-200" data-testid="explainability-card">
+              <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Lightbulb className="w-6 h-6 text-yellow-500" />
                 AI Explainability - Why This Prediction?
               </h3>
               
@@ -1472,26 +1367,23 @@ useEffect(() => {
                 return (
                   <div key={modelName} className="mb-6 last:mb-0">
                     <div className="flex items-center gap-2 mb-3">
-                      <BarChart3 className="w-4 h-4" style={{ color: modelColors[modelName] }} />
-                      <h4 className="text-lg font-semibold uppercase" style={{ color: modelColors[modelName] }}>
+                      <BarChart3 className="w-5 h-5" style={{ color: modelColors[modelName] }} />
+                      <h4 className="text-lg font-bold uppercase" style={{ color: modelColors[modelName] }}>
                         {modelName} Model Explanation
                       </h4>
                     </div>
                     
-                    {/* Human-readable explanation */}
-                    <div className="bg-gray-700 bg-opacity-50 rounded-lg p-4 mb-3">
-                      <p className="text-sm text-gray-300 leading-relaxed">
+                    <div className="bg-green-50 rounded-xl p-4 mb-3 border-2 border-green-200">
+                      <p className="text-sm text-gray-800 leading-relaxed font-medium">
                         💡 {explainData.explanation}
                       </p>
                     </div>
                     
-                    {/* Base value info */}
-                    <div className="text-xs text-gray-400 mb-3">
+                    <div className="text-xs text-gray-600 mb-3 font-medium">
                       Base prediction (average): {explainData.base_value?.toFixed(3)} kg CO₂ 
                       → Final: {explainData.prediction?.toFixed(3)} kg CO₂
                     </div>
                     
-                    {/* Feature importance bars */}
                     <div className="space-y-2">
                       {explainData.feature_importance?.map((feature, idx) => {
                         const isPositive = feature.shap_value > 0;
@@ -1499,19 +1391,19 @@ useEffect(() => {
                         const barWidth = (Math.abs(feature.shap_value) / maxAbsValue) * 100;
                         
                         return (
-                          <div key={idx} className="bg-gray-700 rounded-lg p-3">
+                          <div key={idx} className="bg-gray-50 rounded-xl p-3 border-2 border-gray-200">
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm font-medium text-gray-300">
+                              <span className="text-sm font-semibold text-gray-800">
                                 {feature.feature}
-                                <span className="text-xs text-gray-500 ml-2">
+                                <span className="text-xs text-gray-600 ml-2">
                                   (value: {typeof feature.value === 'number' ? feature.value.toFixed(2) : feature.value})
                                 </span>
                               </span>
-                              <span className={`text-sm font-bold ${isPositive ? 'text-red-400' : 'text-green-400'}`}>
+                              <span className={`text-sm font-bold ${isPositive ? 'text-red-600' : 'text-green-600'}`}>
                                 {isPositive ? '+' : ''}{feature.shap_value.toFixed(3)} kg
                               </span>
                             </div>
-                            <div className="w-full bg-gray-600 rounded-full h-2">
+                            <div className="w-full bg-gray-200 rounded-full h-2">
                               <div
                                 className={`h-2 rounded-full ${isPositive ? 'bg-red-500' : 'bg-green-500'}`}
                                 style={{ width: `${barWidth}%` }}
@@ -1522,8 +1414,7 @@ useEffect(() => {
                       })}
                     </div>
                     
-                    {/* Legend */}
-                    <div className="mt-3 flex items-center gap-4 text-xs text-gray-400">
+                    <div className="mt-3 flex items-center gap-4 text-xs text-gray-600 font-medium">
                       <div className="flex items-center gap-1">
                         <div className="w-3 h-3 bg-red-500 rounded"></div>
                         <span>Increases emissions</span>
@@ -1539,20 +1430,19 @@ useEffect(() => {
             </div>
           )}
 
-          {/* History Chart */}
           {history.length > 0 && (
-            <div className="bg-gray-800 bg-opacity-50 backdrop-blur-lg rounded-2xl p-6 border border-gray-700 shadow-2xl">
-              <h3 className="text-xl font-semibold mb-4">Prediction History</h3>
+            <div className="bg-white rounded-2xl p-6 shadow-lg border-2 border-gray-200" data-testid="prediction-history-card">
+              <h3 className="text-xl font-bold text-gray-900 mb-4">Prediction History</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={history}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="timestamp" stroke="#9ca3af" />
-                  <YAxis stroke="#9ca3af" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="timestamp" stroke="#6b7280" />
+                  <YAxis stroke="#6b7280" />
                   <Tooltip 
-                    contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '8px' }}
+                    contentStyle={{ backgroundColor: '#ffffff', border: '2px solid #e5e7eb', borderRadius: '12px' }}
                   />
                   <Legend />
-                  <Line type="monotone" dataKey="bayesian" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="bayesian" stroke="#10b981" strokeWidth={2} dot={{ r: 4 }} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -1560,34 +1450,17 @@ useEffect(() => {
         </div>
       </div>
 
-      {/* Footer Stats */}
-      <div className="max-w-7xl mx-auto mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-gray-800 bg-opacity-30 backdrop-blur-sm rounded-lg p-4 border border-gray-700">
-          <div className="text-sm text-gray-400">Dataset Size</div>
-          <div className="text-2xl font-bold text-green-400">18K+ Trips</div>
-        </div>
-        <div className="bg-gray-800 bg-opacity-30 backdrop-blur-sm rounded-lg p-4 border border-gray-700">
-          <div className="text-sm text-gray-400">ML Models</div>
-          <div className="text-2xl font-bold text-blue-400">10 Trained</div>
-        </div>
-        <div className="bg-gray-800 bg-opacity-30 backdrop-blur-sm rounded-lg p-4 border border-gray-700">
-          <div className="text-sm text-gray-400">Status</div>
-          <div className="text-2xl font-bold text-purple-400">✅ Production</div>
-        </div>
-      </div>
-
-      {/* Interactive Map Modal */}
+      {/* Map Modal */}
       {showMap && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75 p-4">
-          <div className="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-5xl h-[80vh] flex flex-col">
-            {/* Map Header */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-700">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4" data-testid="map-modal">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b-2 border-gray-200">
               <div>
-                <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  <MapIcon className="w-6 h-6 text-blue-400" />
+                <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                  <MapIcon className="w-6 h-6 text-green-600" />
                   Interactive Route Map
                 </h3>
-                <p className="text-sm text-gray-400 mt-1">
+                <p className="text-sm text-gray-600 mt-1">
                   {mapMode === 'start' 
                     ? '🔵 Click or drag the blue marker to set start point' 
                     : mapMode === 'end'
@@ -1596,105 +1469,106 @@ useEffect(() => {
                 </p>
               </div>
               <button
+                data-testid="close-map-button"
                 onClick={() => setShowMap(false)}
-                className="w-10 h-10 bg-red-500 hover:bg-red-600 rounded-lg flex items-center justify-center transition-all"
+                className="w-10 h-10 bg-red-500 hover:bg-red-600 rounded-xl flex items-center justify-center transition-all"
               >
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5 text-white" />
               </button>
             </div>
 
-            {/* Mode Selector & Location Search */}
-            <div className="p-4 bg-gray-700 space-y-3">
+            <div className="p-4 bg-gray-50 space-y-3 border-b-2 border-gray-200">
               <div className="flex gap-2">
                 <button
+                  data-testid="map-set-start-button"
                   onClick={() => setMapMode('start')}
-                  className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-all ${
+                  className={`flex-1 py-2 px-4 rounded-xl font-semibold transition-all ${
                     mapMode === 'start'
-                      ? 'bg-blue-500 text-white shadow-lg'
-                      : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+                      ? 'bg-green-500 text-white shadow-lg'
+                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                   }`}
                 >
                   🔵 Set Start Point
                 </button>
                 <button
+                  data-testid="map-set-end-button"
                   onClick={() => setMapMode('end')}
-                  className={`flex-1 py-2 px-4 rounded-lg font-semibold transition-all ${
+                  className={`flex-1 py-2 px-4 rounded-xl font-semibold transition-all ${
                     mapMode === 'end'
                       ? 'bg-red-500 text-white shadow-lg'
-                      : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                   }`}
                 >
                   🔴 Set End Point
                 </button>
               </div>
 
-              {/* Location Search in Modal */}
               <div className="grid grid-cols-2 gap-3">
-                {/* Start Location Search */}
                 <div className="relative">
-                  <label className="block text-xs font-medium text-gray-400 mb-1">
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
                     🔵 Search Start Location
                   </label>
                   <div className="relative">
                     <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
                     <input
                       type="text"
+                      data-testid="map-start-search-input"
                       placeholder="Search start..."
                       value={locationSearch.start}
                       onChange={(e) => {
                         setLocationSearch(prev => ({ ...prev, start: e.target.value }));
                         debouncedSearch(e.target.value, 'start');
                       }}
-                      className="w-full pl-9 pr-3 py-2 text-sm bg-gray-600 rounded-lg border border-gray-500 focus:border-blue-500 focus:outline-none text-white"
+                      className="w-full pl-9 pr-3 py-2 text-sm bg-white rounded-lg border-2 border-gray-300 focus:border-green-500 focus:outline-none"
                     />
                   </div>
                   
                   {locationSearch.startSuggestions.length > 0 && (
-                    <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                    <div className="absolute z-50 w-full mt-1 bg-white border-2 border-gray-300 rounded-lg shadow-xl max-h-48 overflow-y-auto">
                       {locationSearch.startSuggestions.map((suggestion, idx) => (
                         <div
                           key={idx}
                           onClick={() => {
                             handleLocationSelect(suggestion, 'start');
-                            setMapMode('end'); // Auto-switch to end point after selecting start
+                            setMapMode('end'); 
                           }}
-                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
+                          className="px-3 py-2 hover:bg-green-50 cursor-pointer border-b border-gray-200 last:border-0"
                         >
-                          <div className="text-sm text-white">{suggestion.display_name}</div>
+                          <div className="text-sm text-gray-900">{suggestion.display_name}</div>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
 
-                {/* End Location Search */}
                 <div className="relative">
-                  <label className="block text-xs font-medium text-gray-400 mb-1">
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
                     🔴 Search End Location
                   </label>
                   <div className="relative">
                     <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
                     <input
                       type="text"
+                      data-testid="map-end-search-input"
                       placeholder="Search end..."
                       value={locationSearch.end}
                       onChange={(e) => {
                         setLocationSearch(prev => ({ ...prev, end: e.target.value }));
                         debouncedSearch(e.target.value, 'end');
                       }}
-                      className="w-full pl-9 pr-3 py-2 text-sm bg-gray-600 rounded-lg border border-gray-500 focus:border-red-500 focus:outline-none text-white"
+                      className="w-full pl-9 pr-3 py-2 text-sm bg-white rounded-lg border-2 border-gray-300 focus:border-red-500 focus:outline-none"
                     />
                   </div>
                   
                   {locationSearch.endSuggestions.length > 0 && (
-                    <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                    <div className="absolute z-50 w-full mt-1 bg-white border-2 border-gray-300 rounded-lg shadow-xl max-h-48 overflow-y-auto">
                       {locationSearch.endSuggestions.map((suggestion, idx) => (
                         <div
                           key={idx}
                           onClick={() => handleLocationSelect(suggestion, 'end')}
-                          className="px-3 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-0"
+                          className="px-3 py-2 hover:bg-red-50 cursor-pointer border-b border-gray-200 last:border-0"
                         >
-                          <div className="text-sm text-white">{suggestion.display_name}</div>
+                          <div className="text-sm text-gray-900">{suggestion.display_name}</div>
                         </div>
                       ))}
                     </div>
@@ -1703,25 +1577,23 @@ useEffect(() => {
               </div>
             </div>
 
-            {/* Map Container */}
             <div className="flex-1 relative">
               <div ref={mapRef} className="w-full h-full"></div>
             </div>
 
-            {/* Map Footer with Info */}
-            <div className="p-4 bg-gray-700 border-t border-gray-600">
+            <div className="p-4 bg-gray-50 border-t-2 border-gray-200">
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
-                  <div className="text-gray-400 text-xs mb-1">🔵 Start Point</div>
-                  <div className="text-white font-medium">
+                  <div className="text-gray-600 text-xs mb-1 font-semibold">🔵 Start Point</div>
+                  <div className="text-gray-900 font-medium">
                     {formData.start_location_name 
                       ? formData.start_location_name.split(',').slice(0, 2).join(',')
                       : 'Not set - Click on map'}
                   </div>
                 </div>
                 <div>
-                  <div className="text-gray-400 text-xs mb-1">🔴 End Point</div>
-                  <div className="text-white font-medium">
+                  <div className="text-gray-600 text-xs mb-1 font-semibold">🔴 End Point</div>
+                  <div className="text-gray-900 font-medium">
                     {formData.end_location_name 
                       ? formData.end_location_name.split(',').slice(0, 2).join(',')
                       : 'Not set - Click on map'}
@@ -1730,14 +1602,15 @@ useEffect(() => {
               </div>
               
               {formData.start_lat && formData.end_lat && (
-                <div className="mt-3 bg-green-500 bg-opacity-20 border border-green-500 rounded-lg p-3 flex items-center justify-between">
+                <div className="mt-3 bg-green-50 border-2 border-green-400 rounded-xl p-3 flex items-center justify-between">
                   <div>
-                    <div className="text-xs text-green-300">Route Distance</div>
-                    <div className="text-2xl font-bold text-green-400">{formData.distance_km} km</div>
+                    <div className="text-xs text-green-700 font-semibold">Route Distance</div>
+                    <div className="text-2xl font-bold text-green-600">{formData.distance_km} km</div>
                   </div>
                   <button
+                    data-testid="confirm-route-button"
                     onClick={() => setShowMap(false)}
-                    className="px-4 py-2 bg-green-500 hover:bg-green-600 rounded-lg font-semibold transition-all"
+                    className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl font-semibold transition-all shadow-md"
                   >
                     ✓ Confirm Route
                   </button>
@@ -1747,6 +1620,28 @@ useEffect(() => {
           </div>
         </div>
       )}
+
+      {/* Footer */}
+      <div className="bg-white border-t border-gray-200 mt-12">
+        <div className="max-w-7xl mx-auto px-8 py-8">
+          <div className="flex items-center justify-center gap-8">
+            <img 
+              src="https://images.pexels.com/photos/1072824/pexels-photo-1072824.jpeg" 
+              alt="Sustainability"
+              className="w-24 h-24 rounded-full object-cover border-4 border-green-200 shadow-lg"
+            />
+            <div className="text-center">
+              <h4 className="text-lg font-bold text-gray-900">Building a Sustainable Future Together</h4>
+              <p className="text-sm text-gray-600 mt-1">Track, Analyze, and Optimize Your Carbon Footprint</p>
+            </div>
+            <img 
+              src="https://images.unsplash.com/photo-1542601906990-b4d3fb778b09" 
+              alt="Growth"
+              className="w-24 h-24 rounded-full object-cover border-4 border-green-200 shadow-lg"
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
